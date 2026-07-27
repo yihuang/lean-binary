@@ -1,4 +1,4 @@
-import Binary.UInt8
+import Binary.Fast
 
 /-!
 # Binary.Fixed

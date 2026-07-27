@@ -126,4 +126,76 @@ theorem decodeBEU_lt (bs : List UInt8) : decodeBEU bs < 256 ^ bs.length := by
   have hlen : (uint8ToNats bs).length = bs.length := by simp [uint8ToNats]
   simpa [decodeBEU, hlen] using h
 
+/-! ## Concatenation, splitting and truncation
+
+The `Binary.Core` laws lifted to `List UInt8`.  A caller that wants to encode
+or decode in pieces — a wider machine word at a time, say — works from these. -/
+
+/-- Splitting law: the low `a` bytes, then the next `b` bytes of what remains. -/
+theorem encodeLEU_add (a b n : Nat) :
+    encodeLEU (a + b) n = encodeLEU a n ++ encodeLEU b (n / 256 ^ a) := by
+  simp [encodeLEU, natsToUInt8, encodeLE_add]
+
+/-- Splitting law, big-endian: the *more* significant piece comes first. -/
+theorem encodeBEU_add (a b n : Nat) :
+    encodeBEU (a + b) n = encodeBEU b (n / 256 ^ a) ++ encodeBEU a n := by
+  simp [encodeBEU, natsToUInt8, encodeBE_add]
+
+/-- Truncation against any modulus that `256 ^ len` divides. -/
+theorem encodeLEU_mod_of_dvd {len m n : Nat} (h : 256 ^ len ∣ m) :
+    encodeLEU len (n % m) = encodeLEU len n := by
+  simp [encodeLEU, natsToUInt8, encodeLE_mod_of_dvd h]
+
+/-- Truncation against a divisible modulus, big-endian. -/
+theorem encodeBEU_mod_of_dvd {len m n : Nat} (h : 256 ^ len ∣ m) :
+    encodeBEU len (n % m) = encodeBEU len n := by
+  simp [encodeBEU, natsToUInt8, encodeBE_mod_of_dvd h]
+
+/-- One more byte, little-endian: the least significant one comes first. -/
+theorem encodeLEU_succ (len n : Nat) :
+    encodeLEU (len + 1) n = UInt8.ofNat (n % 256) :: encodeLEU len (n / 256) := by
+  simp [encodeLEU, natsToUInt8, encodeLE]
+
+/-- One more byte, big-endian: the least significant one comes last. -/
+theorem encodeBEU_succ (len n : Nat) :
+    encodeBEU (len + 1) n = encodeBEU len (n / 256) ++ [UInt8.ofNat (n % 256)] := by
+  simp [encodeBEU, natsToUInt8, encodeBE_succ]
+
+/-- Concatenation law for big-endian decoding. -/
+theorem decodeBEU_append (xs ys : List UInt8) :
+    decodeBEU (xs ++ ys) = decodeBEU xs * 256 ^ ys.length + decodeBEU ys := by
+  simp only [decodeBEU, uint8ToNats, List.map_append, decodeBE_append, List.length_map]
+
+/-- Concatenation law for little-endian decoding. -/
+theorem decodeLEU_append (xs ys : List UInt8) :
+    decodeLEU (xs ++ ys) = decodeLEU xs + 256 ^ xs.length * decodeLEU ys := by
+  simp only [decodeLEU, uint8ToNats, List.map_append, decodeLE_append, List.length_map]
+
+/-- The leading byte of a big-endian string carries the weight of all the rest. -/
+theorem decodeBEU_cons (b : UInt8) (bs : List UInt8) :
+    decodeBEU (b :: bs) = b.toNat * 256 ^ bs.length + decodeBEU bs := by
+  rw [show (b :: bs) = [b] ++ bs from rfl, decodeBEU_append]
+  simp [decodeBEU, uint8ToNats, decodeBE, decodeLE]
+
+/-- Reading big-endian is reading little-endian backwards. -/
+theorem decodeBEU_reverse (bs : List UInt8) : decodeBEU bs.reverse = decodeLEU bs := by
+  simp only [decodeBEU, decodeLEU, uint8ToNats, decodeBE, List.map_reverse, List.reverse_reverse]
+
+/-- Big-endian decoding as a left fold: folding into `acc` shifts it left by one
+    byte per element consumed. -/
+theorem decodeBEU_foldl (acc : Nat) (bs : List UInt8) :
+    bs.foldl (fun acc b => acc * 256 + b.toNat) acc = acc * 256 ^ bs.length + decodeBEU bs := by
+  induction bs generalizing acc with
+  | nil => simp [decodeBEU, decodeBE, decodeLE, uint8ToNats]
+  | cons b bs ih =>
+      rw [List.foldl_cons, ih, decodeBEU_cons, List.length_cons, Nat.pow_add_one, Nat.add_mul,
+        Nat.mul_assoc, Nat.mul_comm 256 (256 ^ bs.length), Nat.add_assoc]
+
+/-- Little-endian decoding as a right fold. -/
+theorem decodeLEU_foldr (bs : List UInt8) :
+    decodeLEU bs = bs.foldr (fun b acc => b.toNat + 256 * acc) 0 := by
+  induction bs with
+  | nil => rfl
+  | cons b bs ih => rw [List.foldr_cons, ← ih]; rfl
+
 end Binary

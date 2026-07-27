@@ -4,3 +4,9 @@ defaultTargets = ["Binary"]
 
 [[lean_lib]]
 name = "Binary"
+
+# Not in `defaultTargets`: built on demand with `lake build bench`.
+[[lean_exe]]
+name = "bench"
+root = "Bench"
+

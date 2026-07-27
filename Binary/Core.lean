@@ -190,4 +190,51 @@ theorem decodeBE_snoc (bs : List Nat) (b : Nat) :
     List.cons_append, List.nil_append, decodeLE]
   omega
 
+/-! ## Splitting and truncating a fixed-width encoding
+
+Together these say when a `len`-byte encoding may be computed in pieces, and
+how much of `n` each piece is allowed to see. -/
+
+/-- **Splitting law**: the low `a` bytes, then the next `b` bytes of what
+    remains. -/
+theorem encodeLE_add (a b n : Nat) :
+    encodeLE (a + b) n = encodeLE a n ++ encodeLE b (n / 256 ^ a) := by
+  induction a generalizing n with
+  | zero => simp [encodeLE]
+  | succ a ih =>
+      have hdiv : n / 256 / 256 ^ a = n / 256 ^ (a + 1) := by
+        rw [Nat.div_div_eq_div_mul, Nat.pow_add_one, Nat.mul_comm]
+      rw [show a + 1 + b = (a + b) + 1 by omega, encodeLE, ih, encodeLE, hdiv]
+      rfl
+
+/-- Splitting law, big-endian: the *more* significant piece comes first. -/
+theorem encodeBE_add (a b n : Nat) :
+    encodeBE (a + b) n = encodeBE b (n / 256 ^ a) ++ encodeBE a n := by
+  simp [encodeBE, encodeLE_add]
+
+/-- **Truncation law**: a `len`-byte encoding only sees `n` modulo `256 ^ len`
+    — the truncation the encoding semantics promise, stated as an equation. -/
+theorem encodeLE_mod (len n : Nat) : encodeLE len (n % 256 ^ len) = encodeLE len n := by
+  induction len generalizing n with
+  | zero => rfl
+  | succ len ih =>
+      have hpow : (256 : Nat) ^ (len + 1) = 256 * 256 ^ len := by
+        rw [Nat.pow_add_one, Nat.mul_comm]
+      have hmod : n % 256 ^ (len + 1) % 256 = n % 256 := by
+        rw [hpow]; exact Nat.mod_mod_of_dvd n ⟨256 ^ len, rfl⟩
+      have hdiv : n % 256 ^ (len + 1) / 256 = n / 256 % 256 ^ len := by
+        rw [hpow]; exact Nat.mod_mul_right_div_self n 256 (256 ^ len)
+      rw [encodeLE, encodeLE, hmod, hdiv, ih]
+
+/-- Truncation against any modulus that `256 ^ len` divides — the form a caller
+    needs when `n` reaches it through a wider fixed-width window. -/
+theorem encodeLE_mod_of_dvd {len m n : Nat} (h : 256 ^ len ∣ m) :
+    encodeLE len (n % m) = encodeLE len n := by
+  rw [← encodeLE_mod len (n % m), Nat.mod_mod_of_dvd n h, encodeLE_mod]
+
+/-- Truncation against a divisible modulus, big-endian. -/
+theorem encodeBE_mod_of_dvd {len m n : Nat} (h : 256 ^ len ∣ m) :
+    encodeBE len (n % m) = encodeBE len n := by
+  simp [encodeBE, encodeLE_mod_of_dvd h]
+
 end Binary

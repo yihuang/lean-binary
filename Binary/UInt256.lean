@@ -1,4 +1,4 @@
-import Binary.ByteArray
+import Binary.Fast
 
 /-!
 # Binary.UInt256
