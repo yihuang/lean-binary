@@ -21,14 +21,29 @@ caches the closed term and every row measures nothing.
 open Binary
 
 def reps : Nat := 100000
+def trials : Nat := 5
 
-def timeIt (label : String) (act : Nat → Nat) : IO Unit := do
+/-- One timed pass over `reps` iterations: elapsed nanoseconds and checksum. -/
+def onePass (act : Nat → Nat) : IO (Nat × Nat) := do
   let t0 ← IO.monoNanosNow
   let mut checksum := 0
   for i in [0:reps] do
     checksum := checksum + act i
   let t1 ← IO.monoNanosNow
-  IO.println s!"  {label}: {(t1 - t0) / reps} ns/op  (checksum {checksum % 97})"
+  return (t1 - t0, checksum)
+
+/-- Discard one warmup pass, then report the fastest of `trials`.  A single
+unwarmed pass tracks machine state closely enough that whole tables drift 20%
+between runs; the minimum is the pass least perturbed by the scheduler. -/
+def timeIt (label : String) (act : Nat → Nat) : IO Unit := do
+  let _ ← onePass act
+  let mut best := 0
+  let mut checksum := 0
+  for _ in [0:trials] do
+    let (ns, c) ← onePass act
+    checksum := c
+    if best == 0 || ns < best then best := ns
+  IO.println s!"  {label}: {best / reps} ns/op  (checksum {checksum % 97})"
 
 def w : Nat := 0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0
 

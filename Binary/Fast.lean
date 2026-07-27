@@ -59,13 +59,13 @@ invisible to the low eight bytes, and that `n >>> 64` is exactly "drop them". -/
 theorem two_pow_64_eq : (2 : Nat) ^ 64 = 256 ^ 8 := by
   rw [show (256 : Nat) = 2 ^ 8 from rfl, ← Nat.pow_mul]
 
-/-- The radix as the literal the chunked decoders multiply by. -/
-theorem pow256_eight : (256 : Nat) ^ 8 = 18446744073709551616 := by
-  rw [← two_pow_64_eq]
-
 /-- Advancing to the next chunk is division by the radix. -/
 theorem shiftRight_64 (n : Nat) : n >>> 64 = n / 256 ^ 8 := by
   rw [Nat.shiftRight_eq_div_pow, two_pow_64_eq]
+
+/-- Attaching a decoded chunk is multiplication by the radix. -/
+theorem shiftLeft_64 (n : Nat) : n <<< 64 = n * 256 ^ 8 := by
+  rw [Nat.shiftLeft_eq, two_pow_64_eq]
 
 /-- `256 ^ len` divides `2 ^ 64` whenever `len ≤ 8`: the side condition that
 lets a `len`-byte encoding be read out of a truncating `UInt64`. -/
@@ -322,10 +322,11 @@ theorem toNat_beWord8 (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8) :
 
 /-! ## Fast decoders -/
 
-/-- Big-endian `List UInt8` decoding, eight bytes per bignum operation. -/
+/-- Big-endian `List UInt8` decoding, eight bytes per bignum operation.  The
+accumulator advances by `<<< 64`, mirroring the encoders' `>>> 64`. -/
 def decodeBEUFast.loop (acc : Nat) : List UInt8 → Nat
   | b0 :: b1 :: b2 :: b3 :: b4 :: b5 :: b6 :: b7 :: rest =>
-      loop (acc * 18446744073709551616 + (beWord8 b0 b1 b2 b3 b4 b5 b6 b7).toNat) rest
+      loop ((acc <<< 64) + (beWord8 b0 b1 b2 b3 b4 b5 b6 b7).toNat) rest
   | bs => bs.foldl (fun acc b => acc * 256 + b.toNat) acc
 
 /-- Big-endian `List UInt8` decoding, eight bytes per bignum operation. -/
@@ -335,19 +336,19 @@ def decodeBEUFast (bs : List UInt8) : Nat := decodeBEUFast.loop 0 bs
 first, so the recursion multiplies up rather than accumulating down. -/
 def decodeLEUFast : List UInt8 → Nat
   | b0 :: b1 :: b2 :: b3 :: b4 :: b5 :: b6 :: b7 :: rest =>
-      (beWord8 b7 b6 b5 b4 b3 b2 b1 b0).toNat + 18446744073709551616 * decodeLEUFast rest
+      (beWord8 b7 b6 b5 b4 b3 b2 b1 b0).toNat + (decodeLEUFast rest <<< 64)
   | bs => bs.foldr (fun b acc => b.toNat + 256 * acc) 0
 
 theorem decodeBEUFast.loop_eq (acc : Nat) (bs : List UInt8) :
     decodeBEUFast.loop acc bs = acc * 256 ^ bs.length + decodeBEU bs := by
   induction acc, bs using decodeBEUFast.loop.induct with
   | case1 acc b0 b1 b2 b3 b4 b5 b6 b7 rest ih =>
-      rw [decodeBEUFast.loop, ih, toNat_beWord8,
+      rw [decodeBEUFast.loop, ih, toNat_beWord8, shiftLeft_64,
         show (b0 :: b1 :: b2 :: b3 :: b4 :: b5 :: b6 :: b7 :: rest) =
           [b0, b1, b2, b3, b4, b5, b6, b7] ++ rest from rfl,
         decodeBEU_append, List.length_append, Nat.pow_add,
         show ([b0, b1, b2, b3, b4, b5, b6, b7] : List UInt8).length = 8 from rfl,
-        pow256_eight, Nat.add_mul, Nat.mul_assoc, Nat.add_assoc]
+        Nat.add_mul, Nat.mul_assoc, Nat.add_assoc]
   | case2 acc bs hne =>
       rw [decodeBEUFast.loop, decodeBEU_foldl]
       exact hne
@@ -367,7 +368,8 @@ theorem decodeBEUFast.loop_eq (acc : Nat) (bs : List UInt8) :
         show (b0 :: b1 :: b2 :: b3 :: b4 :: b5 :: b6 :: b7 :: rest) =
           [b0, b1, b2, b3, b4, b5, b6, b7] ++ rest from rfl,
         decodeLEU_append,
-        show ([b0, b1, b2, b3, b4, b5, b6, b7] : List UInt8).length = 8 from rfl, pow256_eight]
+        show ([b0, b1, b2, b3, b4, b5, b6, b7] : List UInt8).length = 8 from rfl,
+        Nat.mul_comm (256 ^ 8) (decodeLEU rest), ← shiftLeft_64]
   | case2 bs hne =>
       rw [decodeLEUFast, decodeLEU_foldr]
       exact hne

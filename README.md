@@ -64,24 +64,31 @@ so **the definitions and all their theorems are untouched** and callers need no
 code changes. Nothing is added to the trusted base: deleting the `@[csimp]`
 attributes would change performance and nothing else.
 
-Measured by `lake build bench && ./.lake/build/bin/bench`, one full-width
-32-byte word, Apple M-series, compiled (`ref` is the layered pipeline written
-out so `@[csimp]` cannot rewrite it):
+Measured by `lake build bench && ./.lake/build/bin/bench` in a foreground
+shell, one full-width 32-byte word, Apple M4 Max, compiled (`ref` is the
+layered pipeline written out so `@[csimp]` cannot rewrite it).  Each row
+discards a warmup pass and reports the fastest of five:
 
 | codec | ref | now | speedup |
 |---|---|---|---|
-| `encodeBEU` | 4869 ns | 799 ns | 6.1× |
-| `encodeLEU` | 4781 ns | 855 ns | 5.6× |
-| `encodeBEBytes` | 4874 ns | 650 ns | 7.5× |
-| `encodeLEBytes` | 4903 ns | 619 ns | 7.9× |
-| `decodeBEU` | 7138 ns | 1048 ns | 6.8× |
-| `decodeLEU` | 7366 ns | 1414 ns | 5.2× |
-| `decodeBEBytes` | 7209 ns | 1315 ns | 5.5× |
-| `decodeLEBytes` | 7401 ns | 1560 ns | 4.7× |
+| `encodeBEU` | 3732 ns | 655 ns | 5.7× |
+| `encodeLEU` | 3706 ns | 673 ns | 5.5× |
+| `encodeBEBytes` | 3728 ns | 502 ns | 7.4× |
+| `encodeLEBytes` | 3734 ns | 472 ns | 7.9× |
+| `decodeBEU` | 5639 ns | 723 ns | 7.8× |
+| `decodeLEU` | 5748 ns | 1031 ns | 5.6× |
+| `decodeBEBytes` | 5715 ns | 970 ns | 5.9× |
+| `decodeLEBytes` | 5802 ns | 1138 ns | 5.1× |
 
-Roughly 270 ns of every row is the benchmark's own loop (one bignum add per
+The absolute figures are scheduling-context dependent: run under a QoS clamp
+of `utility` — CI runners, background agents — every row including the
+baseline reads 15–20% slower, uniformly, so compare only within one context.
+The speedup column is unaffected.
+
+Roughly 225 ns of every row is the benchmark's own loop (one bignum add per
 iteration, to defeat the compiler's closed-term caching); net of it the codecs
-are 9–13× faster.  Values below `2 ^ 63` are unboxed and never took the bignum
+are 6–14× faster, the `ByteArray` encoders gaining most and the little-endian
+decoders least.  Values below `2 ^ 63` are unboxed and never took the bignum
 path, so short widths and small values see little change — the gain is exactly
 where real EVM data lives: hashes, addresses and token amounts.
 
@@ -163,7 +170,7 @@ Roundtrips: `decodeLEBytes_encodeLEBytes`, `decodeBEBytes_encodeBEBytes`,
 The general splitting and truncation laws live in `Core`/`UInt8` above; this
 layer adds only what is specific to the 64-bit window.
 
-The window: `two_pow_64_eq`, `pow256_eight`, `shiftRight_64`,
+The window: `two_pow_64_eq`, `shiftRight_64`, `shiftLeft_64`,
 `pow256_dvd_two_pow_64`, `encodeLEU_window` / `encodeBEU_window`,
 `encodeLEU_chunk` / `encodeBEU_chunk`.
 Machine-word chunks: `leChunk_eq`, `beChunk_eq`, `pushLEChunk_eq`,

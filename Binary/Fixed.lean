@@ -1,3 +1,5 @@
+-- `Binary.Fast`, not `Binary.UInt8`: its `@[csimp]` replacements only reach
+-- bodies compiled after them, and this module's codecs must get the fast path.
 import Binary.Fast
 
 /-!
