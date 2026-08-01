@@ -1,4 +1,6 @@
-import Binary.ByteArray
+-- `Binary.Fast`, not `Binary.ByteArray`: its `@[csimp]` replacements only reach
+-- bodies compiled after them, and this module's codecs must get the fast path.
+import Binary.Fast
 
 /-!
 # Binary.UInt256
@@ -139,17 +141,21 @@ theorem ofLEBytes_toLEBytes (x : UInt256) : ofLEBytes (toLEBytes x) = x := by
   show ofNat (decodeLEU (encodeLEU byteSize x.toNat)) = x
   rw [h, ofNat_toNat]
 
+/-- Exactly `byteSize` bytes fit, so no truncation happens on the way in:
+the decoded word's `toNat` is the byte string's value on the nose. -/
+theorem toNat_ofBEBytes_of_length {bs : List UInt8} (h : bs.length = byteSize) :
+    (ofBEBytes bs).toNat = decodeBEU bs := by
+  show (ofNat (decodeBEU bs)).toNat = decodeBEU bs
+  rw [toNat_ofNat]
+  apply Nat.mod_eq_of_lt
+  have hb := decodeBEU_lt bs
+  rwa [h] at hb
+
 /-- **Roundtrip**: decoding exactly `byteSize` big-endian bytes and re-encoding is the identity. -/
 theorem toBEBytes_ofBEBytes {bs : List UInt8} (h : bs.length = byteSize) :
     toBEBytes (ofBEBytes bs) = bs := by
-  have e : (ofBEBytes bs).toNat = decodeBEU bs := by
-    show (ofNat (decodeBEU bs)).toNat = decodeBEU bs
-    rw [toNat_ofNat]
-    apply Nat.mod_eq_of_lt
-    have hb := decodeBEU_lt bs
-    rwa [h] at hb
   show encodeBEU byteSize (ofBEBytes bs).toNat = bs
-  rw [e, ← h]
+  rw [toNat_ofBEBytes_of_length h, ← h]
   exact encodeBEU_decodeBEU bs
 
 /-- **Roundtrip**: decoding exactly `byteSize` little-endian bytes and re-encoding is the identity. -/
@@ -212,12 +218,7 @@ theorem toNat_ofBEByteArray_of_size {ba : ByteArray} (h : ba.size = byteSize) :
     (ofBEByteArray ba).toNat = decodeBEBytes ba := by
   have hlen : ba.data.toList.length = byteSize := by
     rw [← ByteArray.size_eq_toList_length]; exact h
-  have hb := decodeBEU_lt ba.data.toList
-  rw [hlen] at hb
-  have e : 256 ^ byteSize = size := by decide
-  rw [e] at hb
-  show (ofNat (decodeBEU ba.data.toList)).toNat = decodeBEU ba.data.toList
-  rw [toNat_ofNat, Nat.mod_eq_of_lt hb]
+  exact toNat_ofBEBytes_of_length hlen
 
 /-- The value decoded from a `byteSize`-wide little-endian `ByteArray`, as a natural. -/
 theorem toNat_ofLEByteArray_of_size {ba : ByteArray} (h : ba.size = byteSize) :
