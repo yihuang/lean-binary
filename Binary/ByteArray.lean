@@ -83,4 +83,32 @@ theorem encodeBEBytes_decodeBEBytes_size (ba : ByteArray) :
   rw [ByteArray.size_eq_toList_length]
   exact encodeBEBytes_decodeBEBytes ba
 
+/-! ## Windowed reads
+
+Decoding a field out of a larger buffer — a word at an offset in EVM call
+data, say — wants the value of `len` bytes starting at `off` without
+slicing anything.  The specification is stated with `drop`/`take` so it
+composes with the list theory above; `Binary.Fast` supplies an
+implementation that reads the buffer by index and never builds a list. -/
+
+/-- The big-endian value of the `len` bytes at offset `off`.  Reads short
+if the window runs past the end, exactly as `take` does. -/
+def decodeBEBytesFrom (ba : ByteArray) (off len : Nat) : Nat :=
+  decodeBEU ((ba.data.toList.drop off).take len)
+
+/-- The little-endian value of the `len` bytes at offset `off`. -/
+def decodeLEBytesFrom (ba : ByteArray) (off len : Nat) : Nat :=
+  decodeLEU ((ba.data.toList.drop off).take len)
+
+/-- A whole-buffer read is the window starting at `0`. -/
+theorem decodeBEBytesFrom_zero (ba : ByteArray) :
+    decodeBEBytesFrom ba 0 ba.size = decodeBEBytes ba := by
+  rw [decodeBEBytesFrom, decodeBEBytes, List.drop_zero, ByteArray.size_eq_toList_length,
+    List.take_length]
+
+theorem decodeLEBytesFrom_zero (ba : ByteArray) :
+    decodeLEBytesFrom ba 0 ba.size = decodeLEBytes ba := by
+  rw [decodeLEBytesFrom, decodeLEBytes, List.drop_zero, ByteArray.size_eq_toList_length,
+    List.take_length]
+
 end Binary

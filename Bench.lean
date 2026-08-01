@@ -58,6 +58,24 @@ def decodeBEURef (bs : List UInt8) : Nat := decodeBE (uint8ToNats bs)
 def decodeBEBytesRef (ba : ByteArray) : Nat := decodeBE (uint8ToNats ba.data.toList)
 def decodeLEBytesRef (ba : ByteArray) : Nat := decodeLE (uint8ToNats ba.data.toList)
 
+/-- Time one full pass over every word of a buffer, reported per word. -/
+def timeItWords (label : String) (words : Nat) (read : Nat → Nat) : IO Unit := do
+  let pass : IO (Nat × Nat) := do
+    let t0 ← IO.monoNanosNow
+    let mut checksum := 0
+    for i in [0:words] do
+      checksum := checksum + read (i * 32) % 97
+    let t1 ← IO.monoNanosNow
+    return (t1 - t0, checksum)
+  let _ ← pass
+  let mut best := 0
+  let mut checksum := 0
+  for _ in [0:trials] do
+    let (ns, c) ← pass
+    checksum := c
+    if best == 0 || ns < best then best := ns
+  IO.println s!"  {label}: {best / words} ns/word  (checksum {checksum % 97})"
+
 def main : IO Unit := do
   IO.println "== encode one 32-byte word =="
   timeIt "baseline: one bignum add" (fun i => (w + i) % 256)
@@ -80,6 +98,17 @@ def main : IO Unit := do
   timeIt "decodeBEBytes    (now) " (fun i => decodeBEBytes ba % 97 + i % 2)
   timeIt "decodeLEBytes    (ref) " (fun i => decodeLEBytesRef ba % 97 + i % 2)
   timeIt "decodeLEBytes    (now) " (fun i => decodeLEBytes ba % 97 + i % 2)
+  IO.println "== read every 32-byte word out of one buffer =="
+  -- What a field-at-a-time reader does: the slicing spelled out (`ref`) walks
+  -- the buffer from the front for every window, so the pass is quadratic in
+  -- the word count; the windowed read is O(32) per word.
+  for words in [16, 128] do
+    let buf := encodeBEBytes (words * 32) w
+    IO.println s!"-- {words} words ({buf.size} bytes)"
+    timeItWords "slice + decode      (ref) " words
+      (fun off => decodeBEU ((buf.data.toList.drop off).take 32))
+    timeItWords "decodeBEBytesFrom   (now) " words
+      (fun off => decodeBEBytesFrom buf off 32)
   IO.println "== agreement (this is what the @[csimp] theorems assert) =="
   IO.println s!"  encodeBEU     {encodeBEU 32 w == encodeBEURef 32 w}   \
 encodeLEU     {encodeLEU 32 w == encodeLEURef 32 w}"

@@ -165,6 +165,14 @@ Roundtrips: `decodeLEBytes_encodeLEBytes`, `decodeBEBytes_encodeBEBytes`,
 `encodeLEBytes_decodeLEBytes_size`, `encodeBEBytes_decodeBEBytes_size`;
 `size_encodeLEBytes` / `size_encodeBEBytes` (`@[simp]`).
 
+Windowed reads for decoding a field out of a larger buffer:
+`decodeBEBytesFrom / decodeLEBytesFrom : ByteArray → Nat → Nat → Nat` give
+the value of the `len` bytes at offset `off`, specified by `drop`/`take` so
+they compose with the list theory, and clamped to the buffer exactly as
+`take` clamps.  `decodeBEBytesFrom_zero` / `decodeLEBytesFrom_zero` recover
+the whole-buffer decoders.  `Binary.Fast` implements the big-endian one by
+index, so a reader that walks many fields of one buffer never slices it.
+
 ### Fast layer (`Binary.Fast`)
 
 The general splitting and truncation laws live in `Core`/`UInt8` above; this
@@ -175,9 +183,21 @@ The window: `two_pow_64_eq`, `shiftRight_64`, `shiftLeft_64`,
 `encodeLEU_chunk` / `encodeBEU_chunk`.
 Machine-word chunks: `leChunk_eq`, `beChunk_eq`, `pushLEChunk_eq`,
 `pushBEChunk_eq`, `toNat_foldl_beWordStep`, `toNat_beWord8`.
+Windowed reads: `window_peel`, `window_length`, `window_chunk8`,
+`decodeBEFromFast.byteLoop_eq`, `decodeBEFromFast.loop_eq`.
 The `@[csimp]` bridges: `encodeLEU_eq_fast`, `encodeBEU_eq_fast`,
 `encodeLEBytes_eq_fast`, `encodeBEBytes_eq_fast`, `decodeLEU_eq_fast`,
-`decodeBEU_eq_fast`, `decodeLEBytes_eq_fast`, `decodeBEBytes_eq_fast`.
+`decodeBEU_eq_fast`, `decodeLEBytes_eq_fast`, `decodeBEBytes_eq_fast`,
+`decodeBEBytesFrom_eq_fast`.
+
+Reading every 32-byte word out of one buffer, compiled (`ref` spells the
+slicing out so `@[csimp]` cannot rewrite it):
+
+    16 words  (512B)    3833 -> 80 ns/word
+    128 words (4096B)  29727 -> 32 ns/word
+
+The `ref` column grows with the buffer because each window re-walks it from
+the front; the windowed read does not.
 
 ### Fixed layer (`Binary.Fixed`)
 

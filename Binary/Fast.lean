@@ -405,4 +405,131 @@ def decodeLEBytesFast (ba : ByteArray) : Nat := decodeLEUFast ba.data.toList
   show decodeLEU ba.data.toList = decodeLEUFast ba.data.toList
   rw [decodeLEU_eq_fast]
 
+/-! ## Windowed `ByteArray` reads
+
+`decodeBEBytesFrom ba off len` is specified by slicing — `drop off`, then
+`take len` — which is the wrong thing to run: the slice copies the buffer
+into a boxed `Array UInt8` and then allocates a cons cell per byte, and a
+caller decoding many fields out of one buffer pays that per field.
+
+The implementation below never mentions the list.  It walks the window by
+index with `ba[i]!`, eight bytes per bignum operation exactly as the
+whole-buffer decoders do, and falls back to a byte loop for the last
+fewer-than-eight.  What made the earlier index-based attempt slow (recorded
+above) was going *unchunked*, not the indexing. -/
+
+/-- One byte off the front of a window, as an indexed read. -/
+theorem window_peel (ba : ByteArray) (i len : Nat) (h : i < ba.size) :
+    (ba.data.toList.drop i).take (len + 1) =
+      ba[i]! :: (ba.data.toList.drop (i + 1)).take len := by
+  have hl : i < ba.data.toList.length := by
+    rwa [← ByteArray.size_eq_toList_length]
+  rw [List.drop_eq_getElem_cons hl, List.take_succ_cons, getElem!_pos ba i h]
+  rfl
+
+/-- The tail of a window: fewer than eight bytes, one bignum step each. -/
+def decodeBEFromFast.byteLoop (ba : ByteArray) (acc : Nat) (i stop : Nat) : Nat :=
+  if i < stop then byteLoop ba (acc * 256 + (ba[i]!).toNat) (i + 1) stop else acc
+termination_by stop - i
+
+/-- The window walked eight bytes at a time, then the short tail. -/
+def decodeBEFromFast.loop (ba : ByteArray) (acc : Nat) (i stop : Nat) : Nat :=
+  if i + 8 ≤ stop then
+    loop ba ((acc <<< 64) +
+        (beWord8 ba[i]! ba[i+1]! ba[i+2]! ba[i+3]!
+                 ba[i+4]! ba[i+5]! ba[i+6]! ba[i+7]!).toNat)
+      (i + 8) stop
+  else byteLoop ba acc i stop
+termination_by stop - i
+
+/-- Big-endian windowed read with no slicing.  The window is clamped to the
+buffer, which is what `take` does to the specification's slice. -/
+def decodeBEBytesFromFast (ba : ByteArray) (off len : Nat) : Nat :=
+  decodeBEFromFast.loop ba 0 off (min (off + len) ba.size)
+
+/-- A window that ends inside the buffer has exactly the length it asks for. -/
+theorem window_length (ba : ByteArray) (i stop : Nat) (hs : stop ≤ ba.size) :
+    ((ba.data.toList.drop i).take (stop - i)).length = stop - i := by
+  rw [List.length_take, List.length_drop, ← ByteArray.size_eq_toList_length]
+  omega
+
+/-- The byte loop is the specification's left fold over the window.  Stated
+with a fuel bound so the induction is on a decreasing measure. -/
+theorem decodeBEFromFast.byteLoop_eq_aux (ba : ByteArray) (hs : stop ≤ ba.size) :
+    ∀ (fuel acc i : Nat), stop - i ≤ fuel →
+      byteLoop ba acc i stop =
+        ((ba.data.toList.drop i).take (stop - i)).foldl (fun acc b => acc * 256 + b.toNat) acc := by
+  intro fuel
+  induction fuel with
+  | zero =>
+      intro acc i hf
+      rw [byteLoop, if_neg (by omega), show stop - i = 0 by omega, List.take_zero, List.foldl_nil]
+  | succ n ih =>
+      intro acc i hf
+      by_cases h : i < stop
+      · rw [byteLoop, if_pos h, show stop - i = (stop - (i + 1)) + 1 by omega,
+          window_peel ba i _ (by omega), List.foldl_cons, ih _ (i + 1) (by omega)]
+      · rw [byteLoop, if_neg h, show stop - i = 0 by omega, List.take_zero, List.foldl_nil]
+
+theorem decodeBEFromFast.byteLoop_eq (ba : ByteArray) (hs : stop ≤ ba.size) (acc i : Nat) :
+    byteLoop ba acc i stop =
+      ((ba.data.toList.drop i).take (stop - i)).foldl (fun acc b => acc * 256 + b.toNat) acc :=
+  byteLoop_eq_aux ba hs (stop - i) acc i (Nat.le_refl _)
+
+/-- Eight bytes of the window, split off the front. -/
+theorem window_chunk8 (ba : ByteArray) (i stop : Nat) (h8 : i + 8 ≤ stop) (hs : stop ≤ ba.size) :
+    (ba.data.toList.drop i).take (stop - i) =
+      [ba[i]!, ba[i+1]!, ba[i+2]!, ba[i+3]!, ba[i+4]!, ba[i+5]!, ba[i+6]!, ba[i+7]!] ++
+        (ba.data.toList.drop (i + 8)).take (stop - (i + 8)) := by
+  have e : ∀ k, k < 8 → i + k < ba.size := fun k hk => by omega
+  rw [show stop - i = (stop - (i + 8)) + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 by omega]
+  rw [window_peel ba i _ (e 0 (by omega))]
+  rw [window_peel ba (i + 1) _ (e 1 (by omega))]
+  rw [window_peel ba (i + 1 + 1) _ (e 2 (by omega))]
+  rw [window_peel ba (i + 1 + 1 + 1) _ (e 3 (by omega))]
+  rw [window_peel ba (i + 1 + 1 + 1 + 1) _ (e 4 (by omega))]
+  rw [window_peel ba (i + 1 + 1 + 1 + 1 + 1) _ (e 5 (by omega))]
+  rw [window_peel ba (i + 1 + 1 + 1 + 1 + 1 + 1) _ (e 6 (by omega))]
+  rw [window_peel ba (i + 1 + 1 + 1 + 1 + 1 + 1 + 1) _ (e 7 (by omega))]
+  rfl
+
+theorem decodeBEFromFast.loop_eq_aux (ba : ByteArray) (hs : stop ≤ ba.size) :
+    ∀ (fuel acc i : Nat), stop - i ≤ fuel →
+      loop ba acc i stop =
+        acc * 256 ^ (stop - i) + decodeBEU ((ba.data.toList.drop i).take (stop - i)) := by
+  intro fuel
+  induction fuel with
+  | zero =>
+      intro acc i hf
+      rw [loop, if_neg (by omega), byteLoop_eq ba hs, decodeBEU_foldl,
+        window_length ba i stop hs]
+  | succ n ih =>
+      intro acc i hf
+      by_cases h : i + 8 ≤ stop
+      · have hlen : (ba.data.toList.drop (i + 8)).length = ba.size - (i + 8) := by
+          rw [List.length_drop, ← ByteArray.size_eq_toList_length]
+        rw [loop, if_pos h, ih _ (i + 8) (by omega), window_chunk8 ba i stop h hs,
+          decodeBEU_append, toNat_beWord8, shiftLeft_64, List.length_take, hlen,
+          show min (stop - (i + 8)) (ba.size - (i + 8)) = stop - (i + 8) by omega,
+          show stop - i = 8 + (stop - (i + 8)) by omega, Nat.pow_add,
+          Nat.add_mul, Nat.mul_assoc, Nat.add_assoc]
+      · rw [loop, if_neg h, byteLoop_eq ba hs, decodeBEU_foldl, window_length ba i stop hs]
+
+theorem decodeBEFromFast.loop_eq (ba : ByteArray) (hs : stop ≤ ba.size) (acc i : Nat) :
+    loop ba acc i stop =
+      acc * 256 ^ (stop - i) + decodeBEU ((ba.data.toList.drop i).take (stop - i)) :=
+  loop_eq_aux ba hs (stop - i) acc i (Nat.le_refl _)
+
+@[csimp] theorem decodeBEBytesFrom_eq_fast : @decodeBEBytesFrom = @decodeBEBytesFromFast := by
+  funext ba off len
+  rw [decodeBEBytesFromFast, decodeBEFromFast.loop_eq ba (Nat.min_le_right _ _),
+    Nat.zero_mul, Nat.zero_add, decodeBEBytesFrom]
+  congr 1
+  have hlen : (ba.data.toList.drop off).length = ba.size - off := by
+    rw [List.length_drop, ← ByteArray.size_eq_toList_length]
+  rcases Nat.le_total (off + len) ba.size with h | h
+  · rw [show min (off + len) ba.size = off + len by omega, show off + len - off = len by omega]
+  · rw [show min (off + len) ba.size = ba.size by omega,
+      List.take_of_length_le (by omega), List.take_of_length_le (by omega)]
+
 end Binary
