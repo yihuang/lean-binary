@@ -109,6 +109,22 @@ def main : IO Unit := do
       (fun off => decodeBEU ((buf.data.toList.drop off).take 32))
     timeItWords "decodeBEBytesFrom   (now) " words
       (fun off => decodeBEBytesFrom buf off 32)
+  -- The buffer above is one value zero-padded to width, so all but its last
+  -- word are zero — the cheap case, where the accumulator never leaves zero.
+  -- This one is full width in every word, which is what an ABI `uint256[]` of
+  -- amounts or hashes is, and it is what the `Nat` codec is slowest at.
+  let wide : ByteArray := Id.run do
+    let mut b := ByteArray.emptyWithCapacity (128 * 32)
+    for i in [0:128] do
+      b := b ++ encodeBEBytes 32 (w + i)
+    return b
+  IO.println s!"-- 128 words, every one full width ({wide.size} bytes)"
+  timeItWords "decodeBEBytesFrom (as Nat) " 128
+    (fun off => decodeBEBytesFrom wide off 32)
+  -- the same word read straight into limbs: no `Nat` is built at all
+  timeItWords "ofBEByteArrayAt  (as limbs)" 128
+    (fun off => let v := UInt256.ofBEByteArrayAt wide off
+                (v.l0 ^^^ v.l1 ^^^ v.l2 ^^^ v.l3).toNat)
   IO.println "== agreement (this is what the @[csimp] theorems assert) =="
   IO.println s!"  encodeBEU     {encodeBEU 32 w == encodeBEURef 32 w}   \
 encodeLEU     {encodeLEU 32 w == encodeLEURef 32 w}"
