@@ -390,21 +390,22 @@ theorem toList_toLEByteArray (x : UInt256) :
 
 `ofBEByteArray` takes a buffer of any length and goes through `decodeBEBytes`,
 so it builds the `Nat`.  A word read at a known offset does not have to:
-`ofBEByteArrayAt` is four `beWord8`s straight into limbs.  The caller checks
-the bound — an ABI word read has already done so. -/
+`ofBEByteArrayAt` is four `beWord8At`s straight into limbs.  The bound is an
+argument rather than a `!`, so the thirty-two reads are unchecked — a caller
+reading a word has already established it to know the word is there. -/
 
 /-- Read the 32-byte big-endian word at `off`, straight into limbs. -/
-def ofBEByteArrayAt (ba : ByteArray) (off : Nat) : UInt256 :=
-  ⟨beWord8 ba[off]! ba[off+1]! ba[off+2]! ba[off+3]! ba[off+4]! ba[off+5]! ba[off+6]! ba[off+7]!,
-   beWord8 ba[off+8]! ba[off+9]! ba[off+10]! ba[off+11]! ba[off+12]! ba[off+13]! ba[off+14]! ba[off+15]!,
-   beWord8 ba[off+16]! ba[off+17]! ba[off+18]! ba[off+19]! ba[off+20]! ba[off+21]! ba[off+22]! ba[off+23]!,
-   beWord8 ba[off+24]! ba[off+25]! ba[off+26]! ba[off+27]! ba[off+28]! ba[off+29]! ba[off+30]! ba[off+31]!⟩
+def ofBEByteArrayAt (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) : UInt256 :=
+  ⟨beWord8At ba off        (by omega),
+   beWord8At ba (off + 8)  (by omega),
+   beWord8At ba (off + 16) (by omega),
+   beWord8At ba (off + 24) (by omega)⟩
 
 /-- **Agreement**: the limb read denotes the windowed `Nat` read.  Four
 unfoldings of the chunked loop, which under the bound takes its eight-byte
 branch every time, then stops on an empty tail. -/
 theorem toNat_ofBEByteArrayAt (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) :
-    (ofBEByteArrayAt ba off).toNat = decodeBEBytesFrom ba off 32 := by
+    (ofBEByteArrayAt ba off h).toNat = decodeBEBytesFrom ba off 32 := by
   rw [decodeBEBytesFrom_eq_fast]
   show _ = decodeBEFromFast.loop ba 0 off (min (off + 32) ba.size)
   rw [show min (off + 32) ba.size = off + 32 from by omega,
@@ -412,7 +413,7 @@ theorem toNat_ofBEByteArrayAt (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.
     decodeBEFromFast.loop, if_pos (by omega), decodeBEFromFast.loop, if_pos (by omega),
     decodeBEFromFast.loop, if_neg (by omega), decodeBEFromFast.byteLoop, if_neg (by omega),
     toNat_eq_limbs, ofBEByteArrayAt]
-  simp only [Nat.shiftLeft_eq, Nat.zero_mul, Nat.zero_add]
+  simp only [beWord8At_eq, Nat.shiftLeft_eq, Nat.zero_mul, Nat.zero_add]
 
 /-- **Refinement**: the `ByteArray` decoder agrees with the `List UInt8` decoder. -/
 theorem ofBEByteArray_eq_ofBEBytes (ba : ByteArray) :

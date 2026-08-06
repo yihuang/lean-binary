@@ -310,6 +310,23 @@ def beWord8 (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8) : UInt64 :=
   beWordStep (beWordStep (beWordStep (beWordStep (beWordStep (beWordStep (beWordStep
     (beWordStep 0 b0) b1) b2) b3) b4) b5) b6) b7
 
+/-- The eight bytes at `off`, as one machine word.  The in-bounds proof is an
+argument so the reads compile to unchecked loads: `ba[i]!` re-tests
+`i < ba.size` and carries a panic branch for every byte, and a caller reading a
+fixed-width word has already established the bound to know the word is there. -/
+@[inline] def beWord8At (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) : UInt64 :=
+  beWord8 ba[off] ba[off+1] ba[off+2] ba[off+3]
+          ba[off+4] ba[off+5] ba[off+6] ba[off+7]
+
+/-- The checked read is the `!` read, wherever the bound holds — the step any
+agreement proof against a `!`-written reader needs. -/
+theorem beWord8At_eq (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) :
+    beWord8At ba off h =
+      beWord8 ba[off]! ba[off+1]! ba[off+2]! ba[off+3]!
+              ba[off+4]! ba[off+5]! ba[off+6]! ba[off+7]! := by
+  unfold beWord8At
+  congr 1 <;> exact (getElem!_pos ba _ (by omega)).symm
+
 theorem toNat_beWord8 (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8) :
     (beWord8 b0 b1 b2 b3 b4 b5 b6 b7).toNat = decodeBEU [b0, b1, b2, b3, b4, b5, b6, b7] := by
   have h := toNat_foldl_beWordStep 0 [b0, b1, b2, b3, b4, b5, b6, b7] (by

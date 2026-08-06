@@ -123,8 +123,10 @@ def main : IO Unit := do
     (fun off => decodeBEBytesFrom wide off 32)
   -- the same word read straight into limbs: no `Nat` is built at all
   timeItWords "ofBEByteArrayAt  (as limbs)" 128
-    (fun off => let v := UInt256.ofBEByteArrayAt wide off
-                (v.l0 ^^^ v.l1 ^^^ v.l2 ^^^ v.l3).toNat)
+    (fun off => if h : off + 32 ≤ wide.size then
+        let v := UInt256.ofBEByteArrayAt wide off h
+        (v.l0 ^^^ v.l1 ^^^ v.l2 ^^^ v.l3).toNat
+      else 0)
   IO.println "== agreement (this is what the @[csimp] theorems assert) =="
   IO.println s!"  encodeBEU     {encodeBEU 32 w == encodeBEURef 32 w}   \
 encodeLEU     {encodeLEU 32 w == encodeLEURef 32 w}"
