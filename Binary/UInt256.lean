@@ -5,35 +5,128 @@ import Binary.Fast
 /-!
 # Binary.UInt256
 
-A 256-bit unsigned integer type (the EVM word size), implemented as a wrapper
-around Lean core's `BitVec 256` — mirroring how `UInt8` … `UInt64` are
-implemented in core — together with the usual fixed-width endianness codec
-(32 bytes) and its roundtrip theorems.
+A 256-bit unsigned integer type (the EVM word size), held as four `UInt64`
+limbs, together with the usual fixed-width endianness codec (32 bytes) and its
+roundtrip theorems.
+
+`BitVec 256` is the obvious representation and was the one used here, but it
+is `Fin (2 ^ 256)`, which is a `Nat`, which above `2 ^ 63` is a heap GMP
+integer — so every operation on a word allocates, the byte codec most of all.
+Four limbs are one heap object with four unboxed scalars.  `toBitVec` is still
+here, now computed rather than stored, and every theorem is still stated
+through it or through `toNat`.
 
 Contents:
 
-* the type `UInt256` with `ofNat` / `toNat`, numerals, equality, `Repr`,
-  and wrap-around arithmetic / bitwise operations inherited from `BitVec 256`;
-* the bridge lemmas `toNat_lt`, `toNat_ofNat`, `toNat_inj`, `ofNat_toNat`;
+* the type `UInt256` with `toBitVec` / `ofBitVec` and their roundtrips,
+  `ofNat` / `toNat`, numerals, equality, `Repr`, and wrap-around arithmetic /
+  bitwise operations defined through the bit vector;
+* the bridge lemmas `toNat_lt`, `toNat_ofNat`, `toNat_inj`, `ofNat_toNat`,
+  and the two limb decompositions — `toNat_eq_limbs` for building a value out
+  of limbs, `toNat_window_l0` … `l3` for reading them back out;
 * the byte codec `toBEBytes` / `toLEBytes` / `ofBEBytes` / `ofLEBytes`
   with the four roundtrip theorems;
 * the `ByteArray` codec `toBEByteArray` / `toLEByteArray` / `ofBEByteArray` /
   `ofLEByteArray` with refinement lemmas (agreement with the `List UInt8`
-  codec) and the four roundtrip theorems.
+  codec) and the four roundtrip theorems;
+* and the two limb-direct entry points that make the representation pay —
+  `toBEByteArrayFast`, swapped in for `toBEByteArray` by `@[csimp]`, and
+  `ofBEByteArrayAt` for reading a word at a known offset, with
+  `toNat_ofBEByteArrayAt` as its agreement.  Neither builds a `Nat`; asking
+  either result for its `toNat` gives the cost straight back.
 -/
 
 namespace Binary
 
-/-- A 256-bit unsigned integer. Wrap-around semantics modulo `2^256`. -/
+/-- A 256-bit unsigned integer, as four 64-bit limbs, most significant first.
+
+`BitVec 256` would be the obvious field, and was: it is `Fin (2 ^ 256)`, which
+is a `Nat`, which above `2 ^ 63` is a heap GMP integer.  Every operation on
+one — including each step of the byte codec — then allocates.  Four `UInt64`s
+are one heap object with four unboxed scalars, and reading a 32-byte word into
+them costs 29 ns where the `Nat` costs 908.
+
+`toBitVec` below is the same bit vector, now computed rather than stored: it
+is the *denotation*, and every theorem in this file is still stated through
+it or through `toNat`.  Nothing in the codec calls it. -/
 structure UInt256 where
-  /-- The underlying bit vector. -/
-  toBitVec : BitVec 256
+  /-- Bits 255…192. -/
+  l0 : UInt64
+  /-- Bits 191…128. -/
+  l1 : UInt64
+  /-- Bits 127…64. -/
+  l2 : UInt64
+  /-- Bits 63…0. -/
+  l3 : UInt64
   deriving DecidableEq
 
 namespace UInt256
 
+/-- The bit vector a word denotes — the four limbs concatenated. -/
+def toBitVec (x : UInt256) : BitVec 256 :=
+  x.l0.toBitVec ++ x.l1.toBitVec ++ x.l2.toBitVec ++ x.l3.toBitVec
+
+/-- Split a bit vector into limbs.  Inverse to `toBitVec`. -/
+def ofBitVec (v : BitVec 256) : UInt256 :=
+  ⟨⟨v.extractLsb' 192 64⟩, ⟨v.extractLsb' 128 64⟩, ⟨v.extractLsb' 64 64⟩, ⟨v.extractLsb' 0 64⟩⟩
+
+@[simp] theorem toBitVec_ofBitVec (v : BitVec 256) : (ofBitVec v).toBitVec = v := by
+  apply BitVec.eq_of_getLsbD_eq
+  intro i hi
+  simp only [toBitVec, ofBitVec, BitVec.getLsbD_append, BitVec.getLsbD_extractLsb']
+  have h4 : i - 64 - 64 - 64 < 64 := by omega
+  by_cases h1 : i < 64
+  · simp [h1]
+  · by_cases h2 : i - 64 < 64
+    · rw [if_neg h1, if_pos h2, show (64 : Nat) + (i - 64) = i from by omega]
+      simp [h2]
+    · by_cases h3 : i - 64 - 64 < 64
+      · rw [if_neg h1, if_neg h2, if_pos h3,
+          show (128 : Nat) + (i - 64 - 64) = i from by omega]
+        simp [h3]
+      · rw [if_neg h1, if_neg h2, if_neg h3,
+          show (192 : Nat) + (i - 64 - 64 - 64) = i from by omega]
+        simp [h4]
+
+/-! Reading a limb back out of the concatenation.  Core has no
+`extractLsb'`-of-`append` lemma, so each of the four is the same `getLsbD`
+argument: peel the three `append`s, then rewrite the index. -/
+
+private theorem getLsbD_l0 (a b c d : BitVec 64) {i : Nat} (hi : i < 64) :
+    (a ++ b ++ c ++ d).getLsbD (192 + i) = a.getLsbD i := by
+  simp only [BitVec.getLsbD_append]
+  rw [if_neg (by omega), if_neg (by omega), if_neg (by omega),
+    show 192 + i - 64 - 64 - 64 = i from by omega]
+
+private theorem getLsbD_l1 (a b c d : BitVec 64) {i : Nat} (hi : i < 64) :
+    (a ++ b ++ c ++ d).getLsbD (128 + i) = b.getLsbD i := by
+  simp only [BitVec.getLsbD_append]
+  rw [if_neg (by omega), if_neg (by omega), if_pos (by omega),
+    show 128 + i - 64 - 64 = i from by omega]
+
+private theorem getLsbD_l2 (a b c d : BitVec 64) {i : Nat} (hi : i < 64) :
+    (a ++ b ++ c ++ d).getLsbD (64 + i) = c.getLsbD i := by
+  simp only [BitVec.getLsbD_append]
+  rw [if_neg (by omega), if_pos (by omega), show 64 + i - 64 = i from by omega]
+
+private theorem getLsbD_l3 (a b c d : BitVec 64) {i : Nat} (hi : i < 64) :
+    (a ++ b ++ c ++ d).getLsbD i = d.getLsbD i := by
+  simp only [BitVec.getLsbD_append]
+  rw [if_pos (by omega)]
+
+theorem ofBitVec_toBitVec (x : UInt256) : ofBitVec x.toBitVec = x := by
+  obtain ⟨a, b, c, d⟩ := x
+  simp only [ofBitVec, toBitVec, UInt256.mk.injEq]
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> apply UInt64.toBitVec_inj.1 <;>
+    (apply BitVec.eq_of_getLsbD_eq; intro i hi;
+     simp only [BitVec.getLsbD_extractLsb', hi, decide_true, Bool.true_and])
+  · exact getLsbD_l0 _ _ _ _ hi
+  · exact getLsbD_l1 _ _ _ _ hi
+  · exact getLsbD_l2 _ _ _ _ hi
+  · simpa using getLsbD_l3 a.toBitVec b.toBitVec c.toBitVec d.toBitVec hi
+
 /-- Wrap-around constructor from a natural number (`n mod 2^256`). -/
-def ofNat (n : Nat) : UInt256 := ⟨BitVec.ofNat 256 n⟩
+def ofNat (n : Nat) : UInt256 := ofBitVec (BitVec.ofNat 256 n)
 
 /-- The value as a natural number. -/
 def toNat (x : UInt256) : Nat := x.toBitVec.toNat
@@ -48,17 +141,16 @@ abbrev byteSize : Nat := 32
 
 theorem toNat_lt (x : UInt256) : x.toNat < size := x.toBitVec.isLt
 
-theorem toNat_ofNat (n : Nat) : (ofNat n).toNat = n % size :=
-  BitVec.toNat_ofNat ..
+theorem toNat_ofNat (n : Nat) : (ofNat n).toNat = n % size := by
+  rw [toNat, ofNat, toBitVec_ofBitVec]
+  exact BitVec.toNat_ofNat ..
 
 theorem toNat_inj {x y : UInt256} : x.toNat = y.toNat ↔ x = y := by
-  cases x with | mk a =>
-  cases y with | mk b =>
-  show (a.toNat = b.toNat) ↔ (UInt256.mk a = UInt256.mk b)
-  rw [BitVec.toNat_inj]
   constructor
+  · intro h
+    have hb : x.toBitVec = y.toBitVec := BitVec.toNat_inj.mp h
+    rw [← ofBitVec_toBitVec x, ← ofBitVec_toBitVec y, hb]
   · intro h; rw [h]
-  · intro h; exact congrArg UInt256.toBitVec h
 
 theorem ofNat_toNat (x : UInt256) : ofNat x.toNat = x := by
   apply toNat_inj.mp
@@ -74,21 +166,21 @@ theorem toNat_lt_256 (x : UInt256) : x.toNat < 256 ^ byteSize := by
 
 instance : OfNat UInt256 n := ⟨ofNat n⟩
 instance : Inhabited UInt256 := ⟨ofNat 0⟩
-instance : BEq UInt256 := ⟨fun a b => a.toBitVec == b.toBitVec⟩
+instance : BEq UInt256 := ⟨fun a b => a.l0 == b.l0 && a.l1 == b.l1 && a.l2 == b.l2 && a.l3 == b.l3⟩
 instance : Repr UInt256 := ⟨fun x _ => repr x.toNat⟩
 instance : ToString UInt256 := ⟨fun x => toString x.toNat⟩
 
 /-! ## Wrap-around arithmetic and bitwise operations (inherited from `BitVec 256`) -/
 
-protected def add (a b : UInt256) : UInt256 := ⟨a.toBitVec + b.toBitVec⟩
-protected def sub (a b : UInt256) : UInt256 := ⟨a.toBitVec - b.toBitVec⟩
-protected def mul (a b : UInt256) : UInt256 := ⟨a.toBitVec * b.toBitVec⟩
-protected def and (a b : UInt256) : UInt256 := ⟨a.toBitVec &&& b.toBitVec⟩
-protected def or (a b : UInt256) : UInt256 := ⟨a.toBitVec ||| b.toBitVec⟩
-protected def xor (a b : UInt256) : UInt256 := ⟨a.toBitVec ^^^ b.toBitVec⟩
-protected def not (a : UInt256) : UInt256 := ⟨~~~ a.toBitVec⟩
-protected def shiftLeft (a : UInt256) (n : Nat) : UInt256 := ⟨a.toBitVec <<< n⟩
-protected def shiftRight (a : UInt256) (n : Nat) : UInt256 := ⟨a.toBitVec >>> n⟩
+protected def add (a b : UInt256) : UInt256 := ofBitVec (a.toBitVec + b.toBitVec)
+protected def sub (a b : UInt256) : UInt256 := ofBitVec (a.toBitVec - b.toBitVec)
+protected def mul (a b : UInt256) : UInt256 := ofBitVec (a.toBitVec * b.toBitVec)
+protected def and (a b : UInt256) : UInt256 := ofBitVec (a.toBitVec &&& b.toBitVec)
+protected def or (a b : UInt256) : UInt256 := ofBitVec (a.toBitVec ||| b.toBitVec)
+protected def xor (a b : UInt256) : UInt256 := ofBitVec (a.toBitVec ^^^ b.toBitVec)
+protected def not (a : UInt256) : UInt256 := ofBitVec (~~~ a.toBitVec)
+protected def shiftLeft (a : UInt256) (n : Nat) : UInt256 := ofBitVec (a.toBitVec <<< n)
+protected def shiftRight (a : UInt256) (n : Nat) : UInt256 := ofBitVec (a.toBitVec >>> n)
 
 instance : Add UInt256 := ⟨UInt256.add⟩
 instance : Sub UInt256 := ⟨UInt256.sub⟩
@@ -101,13 +193,57 @@ instance : HShiftLeft UInt256 Nat UInt256 := ⟨UInt256.shiftLeft⟩
 instance : HShiftRight UInt256 Nat UInt256 := ⟨UInt256.shiftRight⟩
 
 theorem toNat_add (a b : UInt256) : (a + b).toNat = (a.toNat + b.toNat) % size :=
-  BitVec.toNat_add ..
+  by rw [show a + b = UInt256.add a b from rfl, UInt256.add, toNat, toBitVec_ofBitVec]; exact BitVec.toNat_add ..
 
 theorem toNat_mul (a b : UInt256) : (a * b).toNat = (a.toNat * b.toNat) % size :=
-  BitVec.toNat_mul ..
+  by rw [show a * b = UInt256.mul a b from rfl, UInt256.mul, toNat, toBitVec_ofBitVec]; exact BitVec.toNat_mul ..
 
 theorem toNat_sub (a b : UInt256) : (a - b).toNat = (size - b.toNat + a.toNat) % size :=
-  BitVec.toNat_sub ..
+  by rw [show a - b = UInt256.sub a b from rfl, UInt256.sub, toNat, toBitVec_ofBitVec]; exact BitVec.toNat_sub ..
+
+/-! ## limb decomposition
+
+What the byte codec needs: the value a word denotes, in terms of its limbs.
+`BitVec.toNat_append` gives the `|||` form; each `or` is an `add` because the
+lower part is below the shift. -/
+
+/-- The value in terms of its limbs.  `BitVec.toNat_append` gives the `|||`
+form; each `or` is an `add` because the lower part is below the shift. -/
+theorem toNat_eq_limbs (x : UInt256) :
+    x.toNat = ((x.l0.toNat * 2 ^ 64 + x.l1.toNat) * 2 ^ 64 + x.l2.toNat) * 2 ^ 64
+      + x.l3.toNat := by
+  have h1 := x.l1.toBitVec.isLt
+  have h2 := x.l2.toBitVec.isLt
+  have h3 := x.l3.toBitVec.isLt
+  simp only [toNat, toBitVec, BitVec.toNat_append]
+  rw [← Nat.shiftLeft_add_eq_or_of_lt (by simpa using h3),
+    ← Nat.shiftLeft_add_eq_or_of_lt (by simpa using h2),
+    ← Nat.shiftLeft_add_eq_or_of_lt (by simpa using h1)]
+  simp only [Nat.shiftLeft_eq]
+  rfl
+
+/-- Each limb is the corresponding 64-bit window of the value.  Stated in the
+`>>> s % 2 ^ 64` form because that is what the byte codec's `encodeBEU_add`
+chain produces.  Proved of `ofBitVec` first, where the limbs are literally
+the windows, then transported along `ofBitVec_toBitVec`. -/
+private theorem window_ofBitVec (v : BitVec 256) :
+    (v.toNat >>> 192 % 2 ^ 64 = (ofBitVec v).l0.toNat)
+    ∧ (v.toNat >>> 128 % 2 ^ 64 = (ofBitVec v).l1.toNat)
+    ∧ (v.toNat >>> 64 % 2 ^ 64 = (ofBitVec v).l2.toNat)
+    ∧ (v.toNat >>> 0 % 2 ^ 64 = (ofBitVec v).l3.toNat) :=
+  ⟨rfl, rfl, rfl, rfl⟩
+
+theorem toNat_window_l0 (x : UInt256) : x.toNat >>> 192 % 2 ^ 64 = x.l0.toNat := by
+  have h := (window_ofBitVec x.toBitVec).1; rwa [ofBitVec_toBitVec] at h
+
+theorem toNat_window_l1 (x : UInt256) : x.toNat >>> 128 % 2 ^ 64 = x.l1.toNat := by
+  have h := (window_ofBitVec x.toBitVec).2.1; rwa [ofBitVec_toBitVec] at h
+
+theorem toNat_window_l2 (x : UInt256) : x.toNat >>> 64 % 2 ^ 64 = x.l2.toNat := by
+  have h := (window_ofBitVec x.toBitVec).2.2.1; rwa [ofBitVec_toBitVec] at h
+
+theorem toNat_window_l3 (x : UInt256) : x.toNat % 2 ^ 64 = x.l3.toNat := by
+  have h := (window_ofBitVec x.toBitVec).2.2.2; rwa [ofBitVec_toBitVec] at h
 
 /-! ## Byte codec (`byteSize` bytes) -/
 
@@ -185,6 +321,58 @@ def ofBEByteArray (ba : ByteArray) : UInt256 := ofNat (decodeBEBytes ba)
 /-- Little-endian `ByteArray` → `UInt256`. -/
 def ofLEByteArray (ba : ByteArray) : UInt256 := ofNat (decodeLEBytes ba)
 
+/-! ### the encoder, limb-direct
+
+`toBEByteArray` above goes through `toNat`, which builds the bit vector and so
+the bignum — exactly the cost the limbs exist to avoid.  `toBEByteArrayFast`
+pushes the four limbs straight into the buffer, and `@[csimp]` swaps it in at
+code generation, so the definition above stays the one every theorem is
+about. -/
+
+/-- The four limbs pushed straight out, most significant first. -/
+def toBEByteArrayFast (x : UInt256) : ByteArray :=
+  pushBEChunk 8 x.l3 (pushBEChunk 8 x.l2 (pushBEChunk 8 x.l1
+    (pushBEChunk 8 x.l0 (ByteArray.emptyWithCapacity byteSize))))
+
+/-- The width-32 encoding is the four limb encodings in order.  Each step
+splits eight bytes off the bottom with `encodeBEU_add`; each limb is then the
+matching window of the value, which is what `toNat_window_*` says. -/
+private theorem encodeBEU_byteSize_limbs (x : UInt256) :
+    encodeBEU byteSize x.toNat =
+      encodeBEU 8 x.l0.toNat ++ encodeBEU 8 x.l1.toNat ++ encodeBEU 8 x.l2.toNat
+        ++ encodeBEU 8 x.l3.toNat := by
+  have hdvd : (256 : Nat) ^ 8 ∣ 2 ^ 64 := by omega
+  -- one limb: the quotient's low 64 bits are the window, and a width-8
+  -- encoding only reads that far, so the `% 2 ^ 64` can be dropped
+  have step : ∀ {e s k : Nat}, (256 : Nat) ^ e = 2 ^ s → x.toNat >>> s % 2 ^ 64 = k →
+      encodeBEU 8 (x.toNat / 256 ^ e) = encodeBEU 8 k := by
+    intro e s k he hw
+    rw [← hw, Nat.shiftRight_eq_div_pow, encodeBEU_mod_of_dvd hdvd, he]
+  have hl0 := step (by omega : (256 : Nat) ^ 24 = 2 ^ 192) (toNat_window_l0 x)
+  have hl1 := step (by omega : (256 : Nat) ^ 16 = 2 ^ 128) (toNat_window_l1 x)
+  have hl2 := step (by omega : (256 : Nat) ^ 8 = 2 ^ 64) (toNat_window_l2 x)
+  have hl3 : encodeBEU 8 x.toNat = encodeBEU 8 x.l3.toNat := by
+    rw [← toNat_window_l3 x, encodeBEU_mod_of_dvd hdvd]
+  have d1 : x.toNat / 256 ^ 8 / 256 ^ 8 = x.toNat / 256 ^ 16 := by
+    rw [Nat.div_div_eq_div_mul]
+  have d2 : x.toNat / 256 ^ 16 / 256 ^ 8 = x.toNat / 256 ^ 24 := by
+    rw [Nat.div_div_eq_div_mul]
+  show encodeBEU (8 + 24) x.toNat = _
+  rw [encodeBEU_add 8 24 x.toNat, show (24 : Nat) = 8 + 16 from rfl,
+    encodeBEU_add 8 16 (x.toNat / 256 ^ 8), show (16 : Nat) = 8 + 8 from rfl,
+    encodeBEU_add 8 8 (x.toNat / 256 ^ 8 / 256 ^ 8), d1, d2, hl0, hl1, hl2, hl3]
+
+/-- The swap the compiler acts on. -/
+@[csimp] theorem toBEByteArray_eq_fast : @toBEByteArray = @toBEByteArrayFast := by
+  funext x
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj]
+  simp only [toBEByteArray, encodeBEBytes, List.data_toByteArray, List.toList_toArray,
+    toBEByteArrayFast, pushBEChunk_eq,
+    show (ByteArray.emptyWithCapacity byteSize).data.toList = [] from rfl, List.nil_append]
+  exact encodeBEU_byteSize_limbs x
+
+
 /-- **Refinement**: the `ByteArray` encoder agrees with the `List UInt8` encoder. -/
 theorem toList_toBEByteArray (x : UInt256) :
     (toBEByteArray x).data.toList = toBEBytes x := by
@@ -197,6 +385,34 @@ theorem toList_toLEByteArray (x : UInt256) :
     (toLEByteArray x).data.toList = toLEBytes x := by
   simp only [toLEByteArray, encodeLEBytes, toLEBytes, List.data_toByteArray,
     List.toList_toArray]
+
+/-! ### the reader, limb-direct
+
+`ofBEByteArray` takes a buffer of any length and goes through `decodeBEBytes`,
+so it builds the `Nat`.  A word read at a known offset does not have to:
+`ofBEByteArrayAt` is four `beWord8`s straight into limbs.  The caller checks
+the bound — an ABI word read has already done so. -/
+
+/-- Read the 32-byte big-endian word at `off`, straight into limbs. -/
+def ofBEByteArrayAt (ba : ByteArray) (off : Nat) : UInt256 :=
+  ⟨beWord8 ba[off]! ba[off+1]! ba[off+2]! ba[off+3]! ba[off+4]! ba[off+5]! ba[off+6]! ba[off+7]!,
+   beWord8 ba[off+8]! ba[off+9]! ba[off+10]! ba[off+11]! ba[off+12]! ba[off+13]! ba[off+14]! ba[off+15]!,
+   beWord8 ba[off+16]! ba[off+17]! ba[off+18]! ba[off+19]! ba[off+20]! ba[off+21]! ba[off+22]! ba[off+23]!,
+   beWord8 ba[off+24]! ba[off+25]! ba[off+26]! ba[off+27]! ba[off+28]! ba[off+29]! ba[off+30]! ba[off+31]!⟩
+
+/-- **Agreement**: the limb read denotes the windowed `Nat` read.  Four
+unfoldings of the chunked loop, which under the bound takes its eight-byte
+branch every time, then stops on an empty tail. -/
+theorem toNat_ofBEByteArrayAt (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) :
+    (ofBEByteArrayAt ba off).toNat = decodeBEBytesFrom ba off 32 := by
+  rw [decodeBEBytesFrom_eq_fast]
+  show _ = decodeBEFromFast.loop ba 0 off (min (off + 32) ba.size)
+  rw [show min (off + 32) ba.size = off + 32 from by omega,
+    decodeBEFromFast.loop, if_pos (by omega), decodeBEFromFast.loop, if_pos (by omega),
+    decodeBEFromFast.loop, if_pos (by omega), decodeBEFromFast.loop, if_pos (by omega),
+    decodeBEFromFast.loop, if_neg (by omega), decodeBEFromFast.byteLoop, if_neg (by omega),
+    toNat_eq_limbs, ofBEByteArrayAt]
+  simp only [Nat.shiftLeft_eq, Nat.zero_mul, Nat.zero_add]
 
 /-- **Refinement**: the `ByteArray` decoder agrees with the `List UInt8` decoder. -/
 theorem ofBEByteArray_eq_ofBEBytes (ba : ByteArray) :
