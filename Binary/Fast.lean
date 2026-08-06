@@ -208,7 +208,14 @@ def encodeBEBytesFast.loop (acc : ByteArray) (len n : Nat) : ByteArray :=
   else pushBEChunk len (UInt64.ofNat n) acc
 termination_by len
 
-/-- Big-endian `ByteArray` encoding, into a buffer sized in advance. -/
+/-- Big-endian `ByteArray` encoding, into a buffer sized in advance.
+
+`@[extern]` sends the compiled call to `c/binary_shim.c`, which exports the
+whole value in one `mpz_export` instead of peeling it a chunk at a time.  The
+body below is unchanged and is still the definition every theorem here is
+stated over; the attribute only redirects code generation, as it already does
+for `ByteArray.push`. -/
+@[extern "lean_binary_encode_be_bytes"]
 def encodeBEBytesFast (len n : Nat) : ByteArray :=
   encodeBEBytesFast.loop (ByteArray.emptyWithCapacity len) len n
 
@@ -443,7 +450,14 @@ def decodeBEFromFast.loop (ba : ByteArray) (acc : Nat) (i stop : Nat) : Nat :=
 termination_by stop - i
 
 /-- Big-endian windowed read with no slicing.  The window is clamped to the
-buffer, which is what `take` does to the specification's slice. -/
+buffer, which is what `take` does to the specification's slice.
+
+`@[extern]` sends the compiled call to `c/binary_shim.c`, which imports the
+clamped window in one `mpz_import` rather than accumulating `acc <<< 64` a
+chunk at a time — each of those steps allocates a fresh bignum.  As above,
+the body is the definition and the attribute only redirects code
+generation. -/
+@[extern "lean_binary_decode_be_from"]
 def decodeBEBytesFromFast (ba : ByteArray) (off len : Nat) : Nat :=
   decodeBEFromFast.loop ba 0 off (min (off + len) ba.size)
 
