@@ -58,6 +58,16 @@ def decodeBEURef (bs : List UInt8) : Nat := decodeBE (uint8ToNats bs)
 def decodeBEBytesRef (ba : ByteArray) : Nat := decodeBE (uint8ToNats ba.data.toList)
 def decodeLEBytesRef (ba : ByteArray) : Nat := decodeLE (uint8ToNats ba.data.toList)
 
+/-! The minimal and signed codecs, routed through the `List Nat` pipeline —
+what a module that misses the `Binary.Fast` import scoping (or a signed layer
+that delegated down to `encodeBE`) would actually compile. These rows guard
+the regression the library docs warn about. -/
+
+def encodeBEMinBytesRef (n : Nat) : ByteArray :=
+  (natsToUInt8 (encodeBE (minBytes n) n)).toByteArray
+def encodeTwosBEBytesRef (len : Nat) (v : Int) : ByteArray :=
+  (natsToUInt8 (encodeBE len (twosRep len v))).toByteArray
+
 /-- Time one full pass over every word of a buffer, reported per word. -/
 def timeItWords (label : String) (words : Nat) (read : Nat → Nat) : IO Unit := do
   let pass : IO (Nat × Nat) := do
@@ -87,6 +97,11 @@ def main : IO Unit := do
   timeIt "encodeBEBytes    (now) " (fun i => (encodeBEBytes 32 (w + i)).size)
   timeIt "encodeLEBytes    (ref) " (fun i => (encodeLEBytesRef 32 (w + i)).size)
   timeIt "encodeLEBytes    (now) " (fun i => (encodeLEBytes 32 (w + i)).size)
+  IO.println "== encode one 32-byte word, width computed / signed =="
+  timeIt "encodeBEMinBytes (ref) " (fun i => (encodeBEMinBytesRef (w + i)).size)
+  timeIt "encodeBEMinBytes (now) " (fun i => (encodeBEMinBytes (w + i)).size)
+  timeIt "encodeTwosBEBytes(ref) " (fun i => (encodeTwosBEBytesRef 32 (-(w + i : Int))).size)
+  timeIt "encodeTwosBEBytes(now) " (fun i => (encodeTwosBEBytes 32 (-(w + i : Int))).size)
   IO.println "== decode one 32-byte word =="
   let bs := encodeBEU 32 w
   let ba := encodeBEBytes 32 w
@@ -136,3 +151,5 @@ encodeLEBytes {encodeLEBytes 32 w == encodeLEBytesRef 32 w}"
 decodeLEU     {decodeLEU bs == decodeLEURef bs}"
   IO.println s!"  decodeBEBytes {decodeBEBytes ba == decodeBEBytesRef ba}   \
 decodeLEBytes {decodeLEBytes ba == decodeLEBytesRef ba}"
+  IO.println s!"  encodeBEMinBytes {encodeBEMinBytes w == encodeBEMinBytesRef w}   \
+encodeTwosBEBytes {encodeTwosBEBytes 32 (-(w : Int)) == encodeTwosBEBytesRef 32 (-(w : Int))}"

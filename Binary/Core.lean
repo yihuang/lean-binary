@@ -212,6 +212,17 @@ theorem encodeBE_add (a b n : Nat) :
     encodeBE (a + b) n = encodeBE b (n / 256 ^ a) ++ encodeBE a n := by
   simp [encodeBE, encodeLE_add]
 
+/-- A single byte, big-endian. -/
+theorem encodeBE_one (n : Nat) : encodeBE 1 n = [n % 256] := rfl
+
+/-- Recursive characterization from the front — the counterpart of
+    `encodeBE_succ`: the first byte is the most significant one, the top
+    base-256 digit of `n` within the window. -/
+theorem encodeBE_cons (len n : Nat) :
+    encodeBE (len + 1) n = n / 256 ^ len % 256 :: encodeBE len n := by
+  rw [encodeBE_add len 1 n, encodeBE_one]
+  rfl
+
 /-- **Truncation law**: a `len`-byte encoding only sees `n` modulo `256 ^ len`
     — the truncation the encoding semantics promise, stated as an equation. -/
 theorem encodeLE_mod (len n : Nat) : encodeLE len (n % 256 ^ len) = encodeLE len n := by

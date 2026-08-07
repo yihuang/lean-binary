@@ -83,6 +83,18 @@ theorem encodeBEBytes_decodeBEBytes_size (ba : ByteArray) :
   rw [ByteArray.size_eq_toList_length]
   exact encodeBEBytes_decodeBEBytes ba
 
+/-! ## Upper bound of decoded values -/
+
+/-- The value of a `ByteArray` is strictly below `256 ^ size` — no side
+    condition, as at the `UInt8` layer. -/
+theorem decodeLEBytes_lt (ba : ByteArray) : decodeLEBytes ba < 256 ^ ba.size := by
+  rw [decodeLEBytes, ByteArray.size_eq_toList_length]
+  exact decodeLEU_lt _
+
+theorem decodeBEBytes_lt (ba : ByteArray) : decodeBEBytes ba < 256 ^ ba.size := by
+  rw [decodeBEBytes, ByteArray.size_eq_toList_length]
+  exact decodeBEU_lt _
+
 /-! ## Windowed reads
 
 Decoding a field out of a larger buffer — a word at an offset in EVM call

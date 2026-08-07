@@ -2,6 +2,8 @@ import Binary.Core
 import Binary.UInt8
 import Binary.ByteArray
 import Binary.Fixed
+import Binary.Minimal
+import Binary.Signed
 import Binary.UInt256
 
 /-!
@@ -92,5 +94,76 @@ example : UInt256.ofBEByteArray (UInt256.toBEByteArray (42 : UInt256)) = 42 :=
 example : UInt256.ofLEByteArray (UInt256.toLEByteArray (0x0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20 : UInt256))
     = 0x0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20 := by
   native_decide
+
+/-! ## Minimal-length codec (`Binary.Minimal`)
+
+The width is computed from the value rather than supplied. -/
+
+-- The shortest big-endian encoding: 0xDEADBEEF needs 4 bytes → [222, 173, 190, 239]
+#eval encodeBEMin 0xDEADBEEF
+
+-- Widths: 255 fits in one byte, 256 needs two
+#eval (minBytes 255, minBytes 256)
+
+-- Zero encodes as ONE zero byte (the EVM convention), not the empty string
+#eval encodeBEMin 0
+
+-- 32 bytes for a full EVM word, 33 once it overflows one
+#eval (minBytes (2 ^ 256 - 1), minBytes (2 ^ 256))
+
+-- The minimal encoding never has a leading zero byte — that is what "minimal"
+-- means, and it holds by theorem for every n ≠ 0
+example : (encodeBEMin 256).head! ≠ 0 := head_encodeBEMin_ne_zero (by decide)
+
+-- No shorter nonempty byte string decodes to 0xDEADBEEF: four bytes is optimal
+example (bs : List Nat) (hb : IsBytes bs) (hne : bs ≠ [])
+    (hdec : decodeBE bs = 0xDEADBEEF) : 4 ≤ bs.length := by
+  have h4 : minBytes 0xDEADBEEF = 4 :=
+    minBytes_eq_of_byte_range (by decide) (by decide) (by decide)
+  have h := minBytes_le_length hb hne
+  rwa [hdec, h4] at h
+
+-- Roundtrip needs NO hypothesis: the width is chosen to fit
+example : decodeBE (encodeBEMin 0xDEADBEEF) = 0xDEADBEEF := decodeBE_encodeBEMin _
+example : decodeBEBytes (encodeBEMinBytes 123456789) = 123456789 :=
+  decodeBEBytes_encodeBEMinBytes _
+
+-- Exact width by theorem, from the byte-range bound 256^(k-1) <= n < 256^k
+example : minBytes 256 = 2 := minBytes_eq_of_byte_range (by decide) (by decide) (by decide)
+example : minBytes 65535 = 2 := minBytes_eq_of_byte_range (by decide) (by decide) (by decide)
+
+/-! ## Two's-complement signed codec (`Binary.Signed`) -/
+
+-- -1 in one byte → [255]; -2 in four → [255, 255, 255, 254]
+#eval encodeTwosBE 1 (-1)
+#eval encodeTwosBE 4 (-2)
+
+-- The sign boundary: -128 and 127 are the extremes of one byte
+#eval (encodeTwosBE 1 (-128), encodeTwosBE 1 127)
+
+-- Decoding reads the leading bit as the sign
+#eval (decodeTwosBE [128], decodeTwosBE [127], decodeTwosBE [255])
+
+-- -1 in an EVM word is 32 bytes of 0xFF
+#eval (encodeTwosBEBytes 32 (-1)).data.toList.all (fun b => b == 0xFF)
+
+-- Roundtrips on concrete instances, discharged by the Decidable instance
+example : decodeTwosBE (encodeTwosBE 4 (-2)) = -2 :=
+  decodeTwosBE_encodeTwosBE (by decide)
+example : decodeTwosBEBytes (encodeTwosBEBytes 32 (-12345)) = -12345 :=
+  decodeTwosBEBytes_encodeTwosBEBytes (by decide)
+
+-- `InTwosRange` is a REAL hypothesis: out of range the encoding wraps.
+-- 129 does not fit one signed byte, and comes back as -127.
+#eval decodeTwosBE (encodeTwosBE 1 129)
+example : ¬ InTwosRange 1 129 := by decide
+
+-- The other direction: every 2-byte string is the encoding of its decoded value...
+example : encodeTwosBE 2 (decodeTwosBE [255, 254]) = [255, 254] :=
+  encodeTwosBE_decodeTwosBE (bs := [255, 254]) (by intro b hb; simp at hb; omega)
+
+-- ...and decoded values are always representable, so the codec is a bijection
+example : InTwosRange 2 (decodeTwosBE [255, 254]) :=
+  inTwosRange_decodeTwosBE (bs := [255, 254]) (by intro b hb; simp at hb; omega)
 
 end Binary
