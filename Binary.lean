@@ -3,6 +3,8 @@ import Binary.UInt8
 import Binary.ByteArray
 import Binary.Fast
 import Binary.Fixed
+import Binary.Minimal
+import Binary.Signed
 import Binary.UInt256
 import Binary.Examples
 
@@ -18,6 +20,8 @@ proofs, written against the Lean 4 core library only (no mathlib dependency).
 * `Binary.Fast` — efficient compiled implementations of every codec above,
   each proved equal to its definition and registered with `@[csimp]`
 * `Binary.Fixed` — fixed-width `UInt16` / `UInt32` / `UInt64` codecs
+* `Binary.Minimal` — minimal-length big-endian codec (the EVM/ABI convention)
+* `Binary.Signed` — two's-complement big-endian codec (signed EVM/ABI integers)
 * `Binary.UInt256` — a 256-bit unsigned integer (EVM word) with codecs
 * `Binary.Examples` — usage examples and computation-checked instances
 -/

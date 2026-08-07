@@ -1,8 +1,8 @@
 # Binary — a Lean 4 big-endian / little-endian byte-order codec library
 
-Fixed-width endianness encoding/decoding with **machine-checked proofs** of all
-core properties. Written against the Lean 4 core library only — **no mathlib
-dependency**.
+Endianness encoding/decoding with **machine-checked proofs** of all core
+properties — fixed-width, minimal-length, and two's-complement signed. Written
+against the Lean 4 core library only — **no mathlib dependency**.
 
 - Toolchain: `leanprover/lean4:v4.32.0`
 - Build: `lake build` (zero `sorry`; includes examples and computation-checked instances)
@@ -20,6 +20,8 @@ binary/
     ├── ByteArray.lean         # ByteArray runtime interface + roundtrips
     ├── Fast.lean              # efficient compiled implementations (@[csimp])
     ├── Fixed.lean             # UInt16/32/64 fixed-width codecs + roundtrips
+    ├── Minimal.lean           # minimal-length BE codec (EVM/ABI convention)
+    ├── Signed.lean            # two's-complement BE codec (signed EVM/ABI ints)
     ├── UInt256.lean           # 256-bit unsigned integer (EVM word) + codecs
     ├── Examples.lean          # usage examples and computation-checked instances
     └── ../Bench.lean          # `lake build bench` — measures Fast against the definitions
@@ -34,6 +36,8 @@ binary/
 | `ByteArray` | `ByteArray` | runtime I/O interface |
 | `Fast` | — | efficient implementations of all of the above, proved equal and registered `@[csimp]` |
 | `Fixed` | `UInt16/32/64 ↔ List UInt8` | fixed-width codecs |
+| `Minimal` | all three | shortest BE encoding of a `Nat`; width computed, not given |
+| `Signed` | all three | two's-complement BE codec for `Int` |
 | `UInt256` | `UInt256 ↔ List UInt8` / `ByteArray` | 256-bit word (EVM), wraps `BitVec 256` |
 
 Encoding semantics: `encodeBE len n` / `encodeLE len n` produce exactly `len`
@@ -110,9 +114,17 @@ divides — which is what makes it sound to read a chunk out of a truncating
 `UInt64`.
 
 `@[csimp]` rewrites calls in modules compiled *after* the attribute is in
-scope, so `Binary.Fast` is imported by `Binary.Fixed` and `Binary.UInt256`
-rather than the other way round; anything downstream of those gets the fast
-code too.
+scope, so `Binary.Fast` is imported by `Binary.Fixed`, `Binary.UInt256`,
+`Binary.Minimal` and `Binary.Signed` rather than the other way round;
+anything downstream of those gets the fast code too.
+
+This is load-bearing, not tidiness: a module that builds on the codecs but
+imports only `Binary.ByteArray` compiles against the *reference* pipeline
+and silently forfeits the whole speedup — `encodeBEMinBytes` on a full-width
+word measured 5162 ns/op that way against 953 ns/op with `Binary.Fast` in
+scope, for identical work.  The bench measures exactly this pair of
+regressions (`encodeBEMinBytes` and `encodeTwosBEBytes`, `ref` against
+`now`), so the ratio is reproducible with `lake build bench`.
 
 ### Remaining
 
@@ -139,6 +151,7 @@ arithmetic.)
 | `decodeLE_append` | `decodeLE (xs ++ ys) = decodeLE xs + 256^xs.length * decodeLE ys` |
 | `decodeBE_append` | `decodeBE (xs ++ ys) = decodeBE xs * 256^ys.length + decodeBE ys` |
 | `encodeBE_succ` | `encodeBE (len+1) n = encodeBE len (n/256) ++ [n%256]` |
+| `encodeBE_cons` | `encodeBE (len+1) n = n/256^len % 256 :: encodeBE len n` (from the front; `encodeBE_one` is the base) |
 | `decodeBE_snoc` | `decodeBE (bs ++ [b]) = decodeBE bs * 256 + b` |
 | `encodeLE_add` / `encodeBE_add` | `encodeLE (a+b) n = encodeLE a n ++ encodeLE b (n/256^a)` (**splitting**) |
 | `encodeLE_mod` | `encodeLE len (n % 256^len) = encodeLE len n` (**truncation**) |
@@ -163,6 +176,7 @@ The Core splitting/truncation/concatenation laws lifted: `encodeLEU_add` /
 `encodeLEBytes/encodeBEBytes : Nat → Nat → ByteArray`, `decodeLEBytes/decodeBEBytes : ByteArray → Nat`.
 Roundtrips: `decodeLEBytes_encodeLEBytes`, `decodeBEBytes_encodeBEBytes`,
 `encodeLEBytes_decodeLEBytes_size`, `encodeBEBytes_decodeBEBytes_size`;
+unconditional bounds `decodeLEBytes_lt` / `decodeBEBytes_lt`;
 `size_encodeLEBytes` / `size_encodeBEBytes` (`@[simp]`).
 
 Windowed reads for decoding a field out of a larger buffer:
@@ -208,6 +222,67 @@ For each `T ∈ {UInt16, UInt32, UInt64}` (width `k ∈ {2, 4, 8}`):
 - `T.toBEBytes_ofBEBytes` / `T.toLEBytes_ofLEBytes`: encode after decode, given `bs.length = k`
 - `T.length_toBEBytes` / `T.length_toLEBytes` (`@[simp]`)
 
+### Minimal layer (`Binary.Minimal`)
+
+The shortest byte string that decodes back to `n`, as opposed to the fixed-width
+codecs above where you supply the width. `0` encodes as a single `0x00`, matching the
+EVM convention rather than the empty string.
+
+| Theorem | Statement |
+|---|---|
+| `minBytes` | the width: `Nat.log2 n / 8 + 1` (and `1` at `n = 0`) |
+| `minBytes_spec` | `0 < len → (n < 256^len ↔ minBytes n ≤ len)` (**minimality**: the LEAST width that fits) |
+| `lt_pow_minBytes` | `n < 256 ^ minBytes n` (the width works) |
+| `minBytes_le_of_lt` | `n < 256^len → 0 < len → minBytes n ≤ len` |
+| `lt_minBytes_of_le` | `256^len ≤ n → len < minBytes n` (the dual; the lower-bound half of both exact-width lemmas) |
+| `minBytes_eq_of_byte_range` | `256^(k-1) ≤ n < 256^k → minBytes n = k` (**exact width**, the natural byte-range form) |
+| `minBytes_eq_of_range` | `2^(8k-1) ≤ n < 2^(8k) → minBytes n = k` (bit-length form; narrower — only values whose top byte has its high bit set) |
+| `minBytes_div` | `256 ≤ n → minBytes n = minBytes (n/256) + 1` (base-256 recursion, derived from the spec — no `log2` reasoning) |
+| `minBytes_eq_one` | `n < 256 → minBytes n = 1` (base case) |
+| `pow_minBytes_pred_le` | `n ≠ 0 → 256^(minBytes n − 1) ≤ n` (the top byte's weight fits) |
+| `decodeBE_encodeBEMin` (+ `U`/`Bytes`) | roundtrip — **no side condition**, the width is chosen to fit |
+| `encodeBEMin_injective` | the minimal encoding is injective |
+| `head_encodeBEMin_ne_zero` | `n ≠ 0 → (encodeBEMin n).head! ≠ 0` (**no leading zero** — false at `0`, which encodes as `[0x00]`) |
+| `minBytes_le_length` (+ `U`/`size`) | a nonempty string decoding to `n` has at least `minBytes n` bytes (**shortest preimage**) |
+| `length_encodeBEMin` / `size_encodeBEMinBytes` | `= minBytes n` (`@[simp]`) |
+
+`minBytes_div` + `minBytes_eq_one` are what let a caller identify its own recursive
+width function with `minBytes` by plain induction.  `head_encodeBEMin_ne_zero` and
+`minBytes_le_length` are the width facts restated about the strings themselves:
+the encoding wastes no leading zero byte, and nothing shorter decodes back.
+
+### Signed layer (`Binary.Signed`)
+
+Two's-complement big-endian, the convention signed EVM/ABI integers use. Each layer
+is `ofTwosNat ∘ (the unsigned codec of that same layer) ∘ twosRep`, so the unsigned
+theory carries over and every layer keeps its `Binary.Fast` implementation.
+
+| Theorem | Statement |
+|---|---|
+| `twosRep len v` | the unsigned representative: `v.toNat`, or `(256^len + v).toNat` when negative |
+| `InTwosRange len v` | `-256^len ≤ 2v < 256^len` — the usual `[-2^(8len-1), 2^(8len-1))`, stated without a truncating exponent (`Decidable`, so `by decide` discharges it) |
+| `ofTwosNat len u` | the sign correction: `u` read back signed, testing the leading bit as `2u < 256^len` |
+| `twosRep_lt` | in range, the representative fits in `len` bytes |
+| `ofTwosNat_twosRep` | `InTwosRange len v → ofTwosNat len (twosRep len v) = v` (**the one fact behind all three roundtrips**) |
+| `twosRep_ofTwosNat` | `u < 256^len → twosRep len (ofTwosNat len u) = u` (the dual inversion, behind the encode-after-decode direction) |
+| `inTwosRange_ofTwosNat` | `u < 256^len → InTwosRange len (ofTwosNat len u)` (the sign correction lands in range) |
+| `decodeTwosBE_encodeTwosBE` (+ `U`/`Bytes`) | **roundtrip**, given `InTwosRange` |
+| `encodeTwosBE_decodeTwosBE` (+ `U`/`Bytes`) | **roundtrip, encode after decode** — `IsBytes` at the `List Nat` layer, no side condition above |
+| `inTwosRange_decodeTwosBE` (+ `U`/`Bytes`) | decoded values are always representable — with the roundtrips, the codec is a **bijection** between `len`-byte strings and `InTwosRange len` |
+| `encodeTwosBE_injective` | injective on representable values |
+| `encodeTwosBEU_eq` / `encodeTwosBEBytes_eq` | `= encodeBEU/encodeBEBytes len (twosRep len v)` (bridge to the unsigned theory, by `rfl`) |
+| `decodeTwosBEU_eq` / `decodeTwosBEBytes_eq` | the layers agree: each decoder is the one below it on the same bytes |
+| `length_encodeTwosBE` / `size_encodeTwosBEBytes` | `= len` (`@[simp]`) |
+
+`InTwosRange` is required, not decoration: out of range the encoding wraps —
+`decodeTwosBE (encodeTwosBE 1 129) = -127`.
+
+Each layer names its *own* unsigned codec rather than delegating down to the
+`List Nat` one. That is deliberate: `encodeBE`/`decodeBE` carry no `@[csimp]`
+attribute, so layers routed through them compile to the reference pipeline —
+`encodeTwosBEBytes` measured 4879 ns/op that way against 672 ns/op now, for one
+full-width word.
+
 ### UInt256 (`Binary.UInt256`)
 
 A 256-bit unsigned integer (EVM word size) wrapping `BitVec 256`, in the same
@@ -250,6 +325,22 @@ import Binary
 -- Proving a concrete instance via the library theorem (no computation)
 example : Binary.decodeBE (Binary.encodeBE 4 0xDEADBEEF) = 0xDEADBEEF :=
   Binary.decodeBE_encodeBE (by decide)
+
+-- Minimal-length: the width is computed, not supplied. 0xDEADBEEF → [222,173,190,239]
+#eval Binary.encodeBEMin 0xDEADBEEF
+#eval (Binary.minBytes 255, Binary.minBytes 256)   -- → (1, 2)
+
+-- Minimal roundtrip needs NO hypothesis
+example : Binary.decodeBE (Binary.encodeBEMin 0xDEADBEEF) = 0xDEADBEEF :=
+  Binary.decodeBE_encodeBEMin _
+
+-- Signed: two's complement. -1 in one byte → [255]; -2 in four → [255,255,255,254]
+#eval Binary.encodeTwosBE 1 (-1)
+#eval Binary.decodeTwosBE [128]   -- → -128
+
+-- Signed roundtrip, given representability
+example : Binary.decodeTwosBE (Binary.encodeTwosBE 4 (-2)) = -2 :=
+  Binary.decodeTwosBE_encodeTwosBE (by decide)
 
 -- UInt256: 32-byte big-endian, roundtrip by theorem
 example : Binary.UInt256.ofBEBytes (Binary.UInt256.toBEBytes (42 : Binary.UInt256)) = 42 :=
