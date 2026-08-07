@@ -95,7 +95,8 @@ it apart again: about ten allocations where a handful of register ops would do.
 
 Every operation below is `@[csimp]`-swapped for a limb-native version, and each
 costs what its structure costs: the bitwise three are limbwise, `add` carries,
-`sub` is two adds and a complement, `mul` is ten limb products accumulated.
+`sub` is two adds and a complement, `mul` is six full limb products and four
+wrapping ones, accumulated branch-free.
 Only the shifts are left on the `BitVec` route — see `Binary.UInt256`. -/
 
 def opWords : Array UInt256 :=
