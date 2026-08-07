@@ -86,7 +86,45 @@ def timeItWords (label : String) (words : Nat) (read : Nat → Nat) : IO Unit :=
     if best == 0 || ns < best then best := ns
   IO.println s!"  {label}: {best / words} ns/word  (checksum {checksum % 97})"
 
+/-! ## word operations
+
+`UInt256` stores limbs, but `add`/`and`/... are specified — and were computed —
+as `ofBitVec (a.toBitVec ∘ b.toBitVec)`.  `BitVec 256` is a `Fin (2 ^ 256)` is a
+`Nat`, so that route rebuilds a bignum from the limbs, operates on it, and takes
+it apart again: about ten allocations where a handful of register ops would do.
+
+Every operation below is `@[csimp]`-swapped for a limb-native version, and each
+costs what its structure costs: the bitwise three are limbwise, `add` carries,
+`sub` is two adds and a complement, `mul` is six full limb products and four
+wrapping ones, accumulated branch-free.
+Only the shifts are left on the `BitVec` route — see `Binary.UInt256`. -/
+
+def opWords : Array UInt256 :=
+  (List.range 256).toArray.map fun i =>
+    ⟨0x1234567890abcdef, 0xfedcba0987654321, 0x0f1e2d3c4b5a6978, 0x1122334455667788 + i.toUInt64⟩
+
+/-- `n` applications, returning a checksum so nothing is dead code.  `n` reaches
+the loop, or Lean floats the whole call into a cached constant.
+
+`f` is a parameter, so every row pays an indirect call the operation itself
+would not — read these against each other, not as the cost of one `&&&`. -/
+def opRun (f : UInt256 → UInt256 → UInt256) (n : Nat) : Nat := Id.run do
+  let mut acc : UInt64 := 0
+  for i in [0:n] do
+    acc := acc ^^^ (f opWords[i % 256]! opWords[(i + 7) % 256]!).l3
+  return acc.toNat
+
+def benchOps : IO Unit := do
+  IO.println "== word operations (2000 per call) =="
+  timeItWords "and " 64 (fun i => opRun UInt256.and (2000 + i % 3))
+  timeItWords "or  " 64 (fun i => opRun UInt256.or  (2000 + i % 3))
+  timeItWords "xor " 64 (fun i => opRun UInt256.xor (2000 + i % 3))
+  timeItWords "add " 64 (fun i => opRun UInt256.add (2000 + i % 3))
+  timeItWords "sub " 64 (fun i => opRun UInt256.sub (2000 + i % 3))
+  timeItWords "mul " 64 (fun i => opRun UInt256.mul (2000 + i % 3))
+
 def main : IO Unit := do
+  benchOps
   IO.println "== encode one 32-byte word =="
   timeIt "baseline: one bignum add" (fun i => (w + i) % 256)
   timeIt "encodeBEU        (ref) " (fun i => (encodeBEURef 32 (w + i)).length)
