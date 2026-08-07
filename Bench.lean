@@ -91,9 +91,12 @@ def timeItWords (label : String) (words : Nat) (read : Nat → Nat) : IO Unit :=
 `UInt256` stores limbs, but `add`/`and`/... are specified — and were computed —
 as `ofBitVec (a.toBitVec ∘ b.toBitVec)`.  `BitVec 256` is a `Fin (2 ^ 256)` is a
 `Nat`, so that route rebuilds a bignum from the limbs, operates on it, and takes
-it apart again: about ten allocations where four register ops would do.  The
-bitwise four and `add` are `@[csimp]`-swapped for limb-native versions; `add`
-costs more than the bitwise three because it carries across limbs.  `mul` and the shifts still go the long way, and their rows say so. -/
+it apart again: about ten allocations where a handful of register ops would do.
+
+Every operation below is `@[csimp]`-swapped for a limb-native version, and each
+costs what its structure costs: the bitwise three are limbwise, `add` carries,
+`sub` is two adds and a complement, `mul` is ten limb products accumulated.
+Only the shifts are left on the `BitVec` route — see `Binary.UInt256`. -/
 
 def opWords : Array UInt256 :=
   (List.range 256).toArray.map fun i =>

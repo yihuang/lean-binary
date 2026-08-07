@@ -195,11 +195,17 @@ say the concatenation distributes — so no carry reasoning is needed.
 `@[csimp]` redirects code generation and leaves the definitions, and every
 theorem about them, alone.
 
-`sub`, `mul` and the shifts are still on the `BitVec` route: they carry (or
-borrow) across limbs, and only `add` has been done that way so far — see below.
-`bv_decide` would discharge such a goal in a line and must not be used: it emits
-a per-proof native axiom, which would land in the trust base of everything
-downstream.  Everything here needs `propext` and `Quot.sound` only. -/
+Everything below is limb-native except the shifts, which stay on the `BitVec`
+route deliberately: the shift amount is a runtime `Nat`, so a limb version wants
+case analysis on `n / 64` and `n % 64` plus the `UInt64 >>> 64` boundary —
+bit-level reasoning rather than the arithmetic the other six needed — and
+nothing depends on them yet.  Measured at ~2750 ns an operation against ~14 for
+the bitwise three, if that changes.
+
+`bv_decide` would discharge any of these in a line and must not be used: it
+emits a per-proof native axiom, which would land in the trust base of everything
+downstream.  These proofs need `propext` and `Quot.sound`, and `Classical.choice`
+for `not`, `sub` and `mul`. -/
 
 protected def andFast (a b : UInt256) : UInt256 :=
   ⟨a.l0 &&& b.l0, a.l1 &&& b.l1, a.l2 &&& b.l2, a.l3 &&& b.l3⟩
@@ -366,6 +372,198 @@ protected def subFast (a b : UInt256) : UInt256 :=
       (UInt256.addFast x y).toNat = (x.toNat + y.toNat) % 2 ^ 256 := fun x y => by
     rw [← add_eq_addFast]; exact toNat_add_def x y
   rw [hsub, UInt256.subFast, hadd, hadd, hnot, hone]
+  omega
+
+/-- A `UInt64` addition that provably does not wrap is exact. -/
+private theorem toNat_add_of_lt {u v : UInt64} (h : u.toNat + v.toNat < 2 ^ 64) :
+    (u + v).toNat = u.toNat + v.toNat := by
+  rw [UInt64.toNat_add, Nat.mod_eq_of_lt h]
+
+/-- A `UInt64` multiplication of two half-words is exact. -/
+private theorem toNat_mul_of_lt {u v : UInt64} (h : u.toNat * v.toNat < 2 ^ 64) :
+    (u * v).toNat = u.toNat * v.toNat := by
+  rw [UInt64.toNat_mul, Nat.mod_eq_of_lt h]
+
+@[inline] private def mul64 (x y : UInt64) : UInt64 × UInt64 :=
+  let b : UInt64 := 4294967296
+  let xl := x % b; let xh := x / b
+  let yl := y % b; let yh := y / b
+  let ll := xl * yl
+  let lh := xl * yh
+  let hl := xh * yl
+  let t := ll / b + lh % b + hl % b
+  (xh * yh + lh / b + hl / b + t / b, t % b * b + ll % b)
+
+private theorem mul64_spec (x y : UInt64) :
+    (mul64 x y).2.toNat + 2 ^ 64 * (mul64 x y).1.toNat = x.toNat * y.toNat := by
+  have hb : (4294967296 : UInt64).toNat = 2 ^ 32 := rfl
+  have hx := UInt64.toNat_lt x
+  have hy := UInt64.toNat_lt y
+  -- the four halves
+  have hxl : (x % 4294967296).toNat = x.toNat % 2 ^ 32 := by rw [UInt64.toNat_mod, hb]
+  have hxh : (x / 4294967296).toNat = x.toNat / 2 ^ 32 := by rw [UInt64.toNat_div, hb]
+  have hyl : (y % 4294967296).toNat = y.toNat % 2 ^ 32 := by rw [UInt64.toNat_mod, hb]
+  have hyh : (y / 4294967296).toNat = y.toNat / 2 ^ 32 := by rw [UInt64.toNat_div, hb]
+  have bxl : x.toNat % 2 ^ 32 ≤ 2 ^ 32 - 1 := by omega
+  have bxh : x.toNat / 2 ^ 32 ≤ 2 ^ 32 - 1 := by omega
+  have byl : y.toNat % 2 ^ 32 ≤ 2 ^ 32 - 1 := by omega
+  have byh : y.toNat / 2 ^ 32 ≤ 2 ^ 32 - 1 := by omega
+  -- tight bounds on the half-products: the high half fits only just
+  have q1 : x.toNat % 2 ^ 32 * (y.toNat % 2 ^ 32) ≤ (2 ^ 32 - 1) * (2 ^ 32 - 1) :=
+    Nat.mul_le_mul bxl byl
+  have q2 : x.toNat % 2 ^ 32 * (y.toNat / 2 ^ 32) ≤ (2 ^ 32 - 1) * (2 ^ 32 - 1) :=
+    Nat.mul_le_mul bxl byh
+  have q3 : x.toNat / 2 ^ 32 * (y.toNat % 2 ^ 32) ≤ (2 ^ 32 - 1) * (2 ^ 32 - 1) :=
+    Nat.mul_le_mul bxh byl
+  have q4 : x.toNat / 2 ^ 32 * (y.toNat / 2 ^ 32) ≤ (2 ^ 32 - 1) * (2 ^ 32 - 1) :=
+    Nat.mul_le_mul bxh byh
+  -- the limb products are exact
+  have e1 := toNat_mul_of_lt (u := x % 4294967296) (v := y % 4294967296) (by rw [hxl, hyl]; omega)
+  have e2 := toNat_mul_of_lt (u := x % 4294967296) (v := y / 4294967296) (by rw [hxl, hyh]; omega)
+  have e3 := toNat_mul_of_lt (u := x / 4294967296) (v := y % 4294967296) (by rw [hxh, hyl]; omega)
+  have e4 := toNat_mul_of_lt (u := x / 4294967296) (v := y / 4294967296) (by rw [hxh, hyh]; omega)
+  rw [hxl, hyl] at e1; rw [hxl, hyh] at e2; rw [hxh, hyl] at e3; rw [hxh, hyh] at e4
+  -- the expansion `omega` cannot do: variable times variable, and no `ring` here
+  have hexp : ∀ xh xl yh yl : Nat,
+      (xh * 2 ^ 32 + xl) * (yh * 2 ^ 32 + yl)
+        = xh * yh * 2 ^ 64 + (xh * yl + xl * yh) * 2 ^ 32 + xl * yl := by
+    intro xh xl yh yl
+    simp only [Nat.add_mul, Nat.mul_add]
+    ac_rfl
+  have hxy := hexp (x.toNat / 2 ^ 32) (x.toNat % 2 ^ 32) (y.toNat / 2 ^ 32) (y.toNat % 2 ^ 32)
+  rw [Nat.div_add_mod', Nat.div_add_mod'] at hxy
+  simp only [mul64, e1, e2, e3, e4, UInt64.toNat_add, UInt64.toNat_mul, UInt64.toNat_div,
+    UInt64.toNat_mod, hb]
+  omega
+@[inline] private def acc (s : UInt64 × UInt64) (v : UInt64) : UInt64 × UInt64 :=
+  let p := addLimb s.1 v 0
+  (p.1, s.2 + p.2)
+
+/-- `acc` preserves the running value `low + 2 ^ 64 * count`. -/
+private theorem acc_ok (s : UInt64 × UInt64) (v : UInt64) (hs : s.2.toNat < 2 ^ 64 - 1) :
+    (acc s v).1.toNat + 2 ^ 64 * (acc s v).2.toNat
+        = s.1.toNat + 2 ^ 64 * s.2.toNat + v.toNat
+      ∧ (acc s v).2.toNat ≤ s.2.toNat + 1 := by
+  have hstep : (addLimb s.1 v 0).1.toNat + 2 ^ 64 * (addLimb s.1 v 0).2.toNat
+      = s.1.toNat + v.toNat + (0 : UInt64).toNat := addLimb_spec s.1 v 0 (by simp)
+  have hbit : (addLimb s.1 v 0).2.toNat ≤ 1 := by simp only [addLimb]; split <;> simp
+  have hz : (0 : UInt64).toNat = 0 := rfl
+  have hsum : (s.2 + (addLimb s.1 v 0).2).toNat = s.2.toNat + (addLimb s.1 v 0).2.toNat :=
+    toNat_add_of_lt (by omega)
+  refine ⟨?_, ?_⟩ <;> simp only [acc, hsum] <;> omega
+
+/-- Folding `acc` over a list of addends preserves the running value and grows
+the carry count by at most one a step.  The list is a proof device only: the
+multiplier's unrolled `acc (acc (s, 0) v₁) v₂` *is* `[v₁, v₂].foldl acc (s, 0)`
+definitionally, so nothing is allocated at runtime. -/
+private theorem accs_ok : ∀ (vs : List UInt64) (s : UInt64 × UInt64),
+    s.2.toNat + vs.length < 2 ^ 64 - 1 →
+    (vs.foldl acc s).1.toNat + 2 ^ 64 * (vs.foldl acc s).2.toNat
+        = s.1.toNat + 2 ^ 64 * s.2.toNat + (vs.map UInt64.toNat).sum
+      ∧ (vs.foldl acc s).2.toNat ≤ s.2.toNat + vs.length
+  | [], s, _ => by simp
+  | v :: vs, s, h => by
+      have h1 := acc_ok s v (by simp at h; omega)
+      have h2 := accs_ok vs (acc s v) (by simp at h; omega)
+      simp only [List.foldl_cons, List.map_cons, List.sum_cons, List.length_cons] at *
+      omega
+
+/-- The three accumulation widths the multiplier uses, named so the assembly
+proof and the definition mention the same term.  Each is `accs_ok` at a literal
+list, which is definitionally the unrolled fold. -/
+@[inline] private def acc2 (s v₁ v₂ : UInt64) : UInt64 × UInt64 :=
+  acc (acc (s, 0) v₁) v₂
+
+@[inline] private def acc5 (s v₁ v₂ v₃ v₄ v₅ : UInt64) : UInt64 × UInt64 :=
+  acc (acc (acc (acc (acc (s, 0) v₁) v₂) v₃) v₄) v₅
+
+@[inline] private def acc7 (s v₁ v₂ v₃ v₄ v₅ v₆ v₇ : UInt64) : UInt64 × UInt64 :=
+  acc (acc (acc (acc (acc (acc (acc (s, 0) v₁) v₂) v₃) v₄) v₅) v₆) v₇
+
+private theorem acc2_ok (s v₁ v₂ : UInt64) :
+    (acc2 s v₁ v₂).1.toNat + 2 ^ 64 * (acc2 s v₁ v₂).2.toNat
+      = s.toNat + (v₁.toNat + v₂.toNat) := by
+  have h := accs_ok [v₁, v₂] (s, 0) (by simp)
+  simp only [List.foldl_cons, List.foldl_nil, List.map_cons, List.map_nil, List.sum_cons,
+    List.sum_nil] at h
+  simpa [acc2] using h.1
+
+private theorem acc5_ok (s v₁ v₂ v₃ v₄ v₅ : UInt64) :
+    (acc5 s v₁ v₂ v₃ v₄ v₅).1.toNat + 2 ^ 64 * (acc5 s v₁ v₂ v₃ v₄ v₅).2.toNat
+      = s.toNat + (v₁.toNat + (v₂.toNat + (v₃.toNat + (v₄.toNat + v₅.toNat)))) := by
+  have h := accs_ok [v₁, v₂, v₃, v₄, v₅] (s, 0) (by simp)
+  simp only [List.foldl_cons, List.foldl_nil, List.map_cons, List.map_nil, List.sum_cons,
+    List.sum_nil] at h
+  simpa [acc5] using h.1
+
+private theorem acc7_ok (s v₁ v₂ v₃ v₄ v₅ v₆ v₇ : UInt64) :
+    (acc7 s v₁ v₂ v₃ v₄ v₅ v₆ v₇).1.toNat + 2 ^ 64 * (acc7 s v₁ v₂ v₃ v₄ v₅ v₆ v₇).2.toNat
+      = s.toNat + (v₁.toNat + (v₂.toNat + (v₃.toNat + (v₄.toNat + (v₅.toNat
+        + (v₆.toNat + v₇.toNat)))))) := by
+  have h := accs_ok [v₁, v₂, v₃, v₄, v₅, v₆, v₇] (s, 0) (by simp)
+  simp only [List.foldl_cons, List.foldl_nil, List.map_cons, List.map_nil, List.sum_cons,
+    List.sum_nil] at h
+  simpa [acc7] using h.1
+
+/-- Ten limb products accumulated into four weights.  Products of total weight
+four and above are dropped: they are multiples of `2 ^ 256`.  For the weight-3
+row only the low halves are needed, for the same reason. -/
+protected def mulFast (a b : UInt256) : UInt256 :=
+  -- limbs least-significant first
+  let A0 := a.l3; let A1 := a.l2; let A2 := a.l1; let A3 := a.l0
+  let B0 := b.l3; let B1 := b.l2; let B2 := b.l1; let B3 := b.l0
+  let p00 := mul64 A0 B0
+  let p01 := mul64 A0 B1; let p10 := mul64 A1 B0
+  let p02 := mul64 A0 B2; let p11 := mul64 A1 B1; let p20 := mul64 A2 B0
+  let p03 := mul64 A0 B3; let p12 := mul64 A1 B2; let p21 := mul64 A2 B1
+  let p30 := mul64 A3 B0
+  let w1 := acc2 p00.1 p01.2 p10.2
+  let w2 := acc5 w1.2 p01.1 p10.1 p02.2 p11.2 p20.2
+  let w3 := acc7 w2.2 p02.1 p11.1 p20.1 p03.2 p12.2 p21.2 p30.2
+  ⟨w3.1, w2.1, w1.1, p00.2⟩
+
+/-- What the specification computes, as `toNat_add_def` does for addition. -/
+private theorem toNat_mul_def (a b : UInt256) :
+    (UInt256.mul a b).toNat = (a.toNat * b.toNat) % 2 ^ 256 := by
+  rw [UInt256.mul, toNat, toBitVec_ofBitVec]; exact BitVec.toNat_mul ..
+
+@[csimp] theorem mul_eq_mulFast : @UInt256.mul = @UInt256.mulFast := by
+  funext a b
+  rw [← toNat_inj]
+  -- the ten limb products
+  have m00 := mul64_spec a.l3 b.l3
+  have m01 := mul64_spec a.l3 b.l2
+  have m10 := mul64_spec a.l2 b.l3
+  have m02 := mul64_spec a.l3 b.l1
+  have m11 := mul64_spec a.l2 b.l2
+  have m20 := mul64_spec a.l1 b.l3
+  have m03 := mul64_spec a.l3 b.l0
+  have m12 := mul64_spec a.l2 b.l1
+  have m21 := mul64_spec a.l1 b.l2
+  have m30 := mul64_spec a.l0 b.l3
+  -- the three accumulations
+  have hw1 := acc2_ok (mul64 a.l3 b.l3).1 (mul64 a.l3 b.l2).2 (mul64 a.l2 b.l3).2
+  have hw2 := acc5_ok (acc2 (mul64 a.l3 b.l3).1 (mul64 a.l3 b.l2).2 (mul64 a.l2 b.l3).2).2 (mul64 a.l3 b.l2).1 (mul64 a.l2 b.l3).1 (mul64 a.l3 b.l1).2 (mul64 a.l2 b.l2).2 (mul64 a.l1 b.l3).2
+  have hw3 := acc7_ok (acc5 (acc2 (mul64 a.l3 b.l3).1 (mul64 a.l3 b.l2).2 (mul64 a.l2 b.l3).2).2 (mul64 a.l3 b.l2).1 (mul64 a.l2 b.l3).1 (mul64 a.l3 b.l1).2 (mul64 a.l2 b.l2).2 (mul64 a.l1 b.l3).2).2 (mul64 a.l3 b.l1).1 (mul64 a.l2 b.l2).1 (mul64 a.l1 b.l3).1 (mul64 a.l3 b.l0).2 (mul64 a.l2 b.l1).2 (mul64 a.l1 b.l2).2 (mul64 a.l0 b.l3).2
+  -- the result limbs are words
+  have b0 : (acc7 (acc5 (acc2 (mul64 a.l3 b.l3).1 (mul64 a.l3 b.l2).2 (mul64 a.l2 b.l3).2).2 (mul64 a.l3 b.l2).1 (mul64 a.l2 b.l3).1 (mul64 a.l3 b.l1).2 (mul64 a.l2 b.l2).2 (mul64 a.l1 b.l3).2).2 (mul64 a.l3 b.l1).1 (mul64 a.l2 b.l2).1 (mul64 a.l1 b.l3).1 (mul64 a.l3 b.l0).2 (mul64 a.l2 b.l1).2 (mul64 a.l1 b.l2).2 (mul64 a.l0 b.l3).2).1.toNat < 2 ^ 64 := UInt64.toNat_lt _
+  have b1 : (acc5 (acc2 (mul64 a.l3 b.l3).1 (mul64 a.l3 b.l2).2 (mul64 a.l2 b.l3).2).2 (mul64 a.l3 b.l2).1 (mul64 a.l2 b.l3).1 (mul64 a.l3 b.l1).2 (mul64 a.l2 b.l2).2 (mul64 a.l1 b.l3).2).1.toNat < 2 ^ 64 := UInt64.toNat_lt _
+  have b2 : (acc2 (mul64 a.l3 b.l3).1 (mul64 a.l3 b.l2).2 (mul64 a.l2 b.l3).2).1.toNat < 2 ^ 64 := UInt64.toNat_lt _
+  have b3 : (mul64 a.l3 b.l3).2.toNat < 2 ^ 64 := UInt64.toNat_lt _
+  -- the sixteen-term expansion: `omega` cannot multiply two variables, and the
+  -- terms of weight four and above are the multiple of `2 ^ 256` that vanishes
+  have hexp : ∀ a0 a1 a2 a3 b0 b1 b2 b3 : Nat,
+      (((a0 * 2^64 + a1) * 2^64 + a2) * 2^64 + a3) * (((b0 * 2^64 + b1) * 2^64 + b2) * 2^64 + b3)
+        = (a3*b3 + (a3*b2 + a2*b3) * 2^64 + (a3*b1 + a2*b2 + a1*b3) * 2^128
+           + (a3*b0 + a2*b1 + a1*b2 + a0*b3) * 2^192)
+          + 2^256 * ((a2*b0 + a1*b1 + a0*b2) + (a1*b0 + a0*b1) * 2^64 + a0*b0 * 2^128) := by
+    intro a0 a1 a2 a3 b0 b1 b2 b3
+    simp only [Nat.add_mul, Nat.mul_add]
+    ac_rfl
+  have hab := hexp a.l0.toNat a.l1.toNat a.l2.toNat a.l3.toNat
+    b.l0.toNat b.l1.toNat b.l2.toNat b.l3.toNat
+  rw [toNat_mul_def, UInt256.mulFast]
+  simp only [toNat_eq_limbs]
   omega
 
 instance : Add UInt256 := ⟨UInt256.add⟩
