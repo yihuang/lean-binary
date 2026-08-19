@@ -67,6 +67,14 @@ theorem shiftRight_64 (n : Nat) : n >>> 64 = n / 256 ^ 8 := by
 theorem shiftLeft_64 (n : Nat) : n <<< 64 = n * 256 ^ 8 := by
   rw [Nat.shiftLeft_eq, two_pow_64_eq]
 
+/-- Shifting distributes over addition. -/
+theorem shiftLeft_add (a b k : Nat) : (a + b) <<< k = (a <<< k) + (b <<< k) := by
+  rw [Nat.shiftLeft_eq, Nat.add_mul, ← Nat.shiftLeft_eq, ← Nat.shiftLeft_eq]
+
+/-- Shifts compose by adding their offsets. -/
+theorem shiftLeft_shiftLeft (a k m : Nat) : (a <<< k) <<< m = a <<< (k + m) := by
+  rw [Nat.shiftLeft_eq, Nat.shiftLeft_eq, Nat.shiftLeft_eq, Nat.pow_add, Nat.mul_assoc]
+
 /-- `256 ^ len` divides `2 ^ 64` whenever `len ≤ 8`: the side condition that
 lets a `len`-byte encoding be read out of a truncating `UInt64`. -/
 theorem pow256_dvd_two_pow_64 {len : Nat} (h : len ≤ 8) : 256 ^ len ∣ 2 ^ 64 := by
@@ -350,11 +358,16 @@ def decodeBEUFast.loop (acc : Nat) : List UInt8 → Nat
 def decodeBEUFast (bs : List UInt8) : Nat := decodeBEUFast.loop 0 bs
 
 /-- Little-endian `List UInt8` decoding: the chunks arrive least significant
-first, so the recursion multiplies up rather than accumulating down. -/
-def decodeLEUFast : List UInt8 → Nat
+first, so the low chunks are accumulated as they are read.  The accumulator
+holds the low-order chunks already seen and `k` is their bit offset; the
+final short tail is shifted by `k` and added at the end. -/
+def decodeLEUFast.loop (acc k : Nat) : List UInt8 → Nat
   | b0 :: b1 :: b2 :: b3 :: b4 :: b5 :: b6 :: b7 :: rest =>
-      (beWord8 b7 b6 b5 b4 b3 b2 b1 b0).toNat + (decodeLEUFast rest <<< 64)
-  | bs => bs.foldr (fun b acc => b.toNat + 256 * acc) 0
+      loop (acc + ((beWord8 b7 b6 b5 b4 b3 b2 b1 b0).toNat <<< k)) (k + 64) rest
+  | bs => acc + (bs.foldr (fun b acc => b.toNat + 256 * acc) 0 <<< k)
+
+/-- Little-endian `List UInt8` decoding, eight bytes per bignum operation. -/
+def decodeLEUFast (bs : List UInt8) : Nat := decodeLEUFast.loop 0 0 bs
 
 theorem decodeBEUFast.loop_eq (acc : Nat) (bs : List UInt8) :
     decodeBEUFast.loop acc bs = acc * 256 ^ bs.length + decodeBEU bs := by
@@ -374,22 +387,29 @@ theorem decodeBEUFast.loop_eq (acc : Nat) (bs : List UInt8) :
   funext bs
   rw [decodeBEUFast, decodeBEUFast.loop_eq, Nat.zero_mul, Nat.zero_add]
 
-@[csimp] theorem decodeLEU_eq_fast : @decodeLEU = @decodeLEUFast := by
-  funext bs
-  induction bs using decodeLEUFast.induct with
-  | case1 b0 b1 b2 b3 b4 b5 b6 b7 rest ih =>
+theorem decodeLEUFast.loop_eq (acc k : Nat) (bs : List UInt8) :
+    decodeLEUFast.loop acc k bs = acc + (decodeLEU bs <<< k) := by
+  induction acc, k, bs using decodeLEUFast.loop.induct with
+  | case1 acc k b0 b1 b2 b3 b4 b5 b6 b7 rest ih =>
       have hchunk : (beWord8 b7 b6 b5 b4 b3 b2 b1 b0).toNat =
           decodeLEU [b0, b1, b2, b3, b4, b5, b6, b7] := by
         rw [toNat_beWord8, ← decodeBEU_reverse]; rfl
-      rw [decodeLEUFast, hchunk, ← ih,
+      rw [decodeLEUFast.loop, ih, hchunk,
         show (b0 :: b1 :: b2 :: b3 :: b4 :: b5 :: b6 :: b7 :: rest) =
           [b0, b1, b2, b3, b4, b5, b6, b7] ++ rest from rfl,
         decodeLEU_append,
         show ([b0, b1, b2, b3, b4, b5, b6, b7] : List UInt8).length = 8 from rfl,
-        Nat.mul_comm (256 ^ 8) (decodeLEU rest), ← shiftLeft_64]
-  | case2 bs hne =>
-      rw [decodeLEUFast, decodeLEU_foldr]
+        Nat.mul_comm (256 ^ 8) (decodeLEU rest), ← shiftLeft_64,
+        show k + 64 = 64 + k by omega,
+        shiftLeft_add, ← shiftLeft_shiftLeft, Nat.add_assoc]
+  | case2 acc k bs hne =>
+      rw [decodeLEUFast.loop, decodeLEU_foldr]
       exact hne
+
+@[csimp] theorem decodeLEU_eq_fast : @decodeLEU = @decodeLEUFast := by
+  funext bs
+  rw [decodeLEUFast, decodeLEUFast.loop_eq]
+  simp [Nat.shiftLeft_eq]
 
 /-! ## The `ByteArray` decoders
 
