@@ -4,7 +4,7 @@ Endianness encoding/decoding with **machine-checked proofs** of all core
 properties — fixed-width, minimal-length, and two's-complement signed. Written
 against the Lean 4 core library only — **no mathlib dependency**.
 
-- Toolchain: `leanprover/lean4:v4.32.0`
+- Toolchain: `leanprover/lean4:v4.33.0`
 - Build: `lake build` (zero `sorry`; includes examples and computation-checked instances)
 
 ## Project layout
@@ -362,7 +362,7 @@ then `import Binary`.
 ## Building and verifying
 
 ```bash
-elan toolchain install leanprover/lean4:v4.32.0   # if not already installed
+elan toolchain install leanprover/lean4:v4.33.0   # if not already installed
 lake build
 ```
 
