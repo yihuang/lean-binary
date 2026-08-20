@@ -677,13 +677,9 @@ def pushLE (x : UInt256) (acc : ByteArray) : ByteArray :=
 
 `toBEByteArray` above goes through `toNat`, which builds the bit vector and so
 the bignum — exactly the cost the limbs exist to avoid.  `toBEByteArrayFast`
-pushes the four limbs straight into the buffer, and `@[csimp]` swaps it in at
-code generation, so the definition above stays the one every theorem is
-about. -/
-
-/-- The four limbs pushed straight out, most significant first. -/
-def toBEByteArrayFast (x : UInt256) : ByteArray :=
-  pushBE x (ByteArray.emptyWithCapacity byteSize)
+writes the four limbs straight into a pre-sized zero buffer, and `@[csimp]`
+swaps it in at code generation, so the definition above stays the one every
+theorem is about.  It is defined after the in-place writers it uses. -/
 
 /-- The width-32 encoding is the four limb encodings in order.  Each step
 splits eight bytes off the bottom with `encodeBEU_add`; each limb is then the
@@ -713,20 +709,6 @@ private theorem encodeBEU_byteSize_limbs (x : UInt256) :
     encodeBEU_add 8 16 (x.toNat / 256 ^ 8), show (16 : Nat) = 8 + 8 from rfl,
     encodeBEU_add 8 8 (x.toNat / 256 ^ 8 / 256 ^ 8), d1, d2, hl0, hl1, hl2, hl3]
 
-/-- The swap the compiler acts on. -/
-@[csimp] theorem toBEByteArray_eq_fast : @toBEByteArray = @toBEByteArrayFast := by
-  funext x
-  apply ByteArray.data_inj
-  rw [← Array.toList_inj]
-  simp only [toBEByteArray, encodeBEBytes, List.data_toByteArray, List.toList_toArray,
-    toBEByteArrayFast, pushBE, pushBELimb_eq,
-    show (ByteArray.emptyWithCapacity byteSize).data.toList = [] from rfl, List.nil_append]
-  exact encodeBEU_byteSize_limbs x
-
-/-- The four limbs pushed little-endian, least significant limb first. -/
-def toLEByteArrayFast (x : UInt256) : ByteArray :=
-  pushLE x (ByteArray.emptyWithCapacity byteSize)
-
 /-- The width-32 little-endian encoding is the four limb encodings in order,
 least significant limb first. -/
 private theorem encodeLEU_byteSize_limbs (x : UInt256) :
@@ -753,15 +735,6 @@ private theorem encodeLEU_byteSize_limbs (x : UInt256) :
     encodeLEU_add 8 8 (x.toNat / 256 ^ 8 / 256 ^ 8), d1, d2, hl3, hl2, hl1, hl0]
   simp [List.append_assoc]
 
-/-- The swap the compiler acts on for the little-endian encoder. -/
-@[csimp] theorem toLEByteArray_eq_fast : @toLEByteArray = @toLEByteArrayFast := by
-  funext x
-  apply ByteArray.data_inj
-  rw [← Array.toList_inj]
-  simp only [toLEByteArray, encodeLEBytes, List.data_toByteArray, List.toList_toArray,
-    toLEByteArrayFast, pushLE, pushLELimb_eq,
-    show (ByteArray.emptyWithCapacity byteSize).data.toList = [] from rfl, List.nil_append]
-  exact encodeLEU_byteSize_limbs x
 
 /-- `pushBE` appends the big-endian encoding. -/
 theorem pushBE_eq (x : UInt256) (acc : ByteArray) :
@@ -1224,6 +1197,80 @@ theorem writeLEAt_eq (x : UInt256) (ba : ByteArray) (off : USize)
   rw [show off.toNat + 8 + 8 + 8 + 8 = off.toNat + 32 from by omega,
     show toLEBytes x = encodeLEU byteSize x.toNat from rfl, encodeLEU_byteSize_limbs]
   simp [List.append_assoc]
+
+/-- The four limbs written straight into a pre-sized zero buffer, most
+significant first.  One allocation, then 32 unchecked `ByteArray.uset`s. -/
+def toBEByteArrayFast (x : UInt256) : ByteArray :=
+  writeBEAt x (ByteArray.mk (Array.replicate byteSize 0)) (0 : USize)
+    (by
+      have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = byteSize := by
+        simp only [ByteArray.size, Array.size_replicate]
+      rw [hmk]
+      simp)
+
+/-- The fast encoder's data is the width-32 encoding. -/
+private theorem toBEByteArrayFast_data (x : UInt256) :
+    (toBEByteArrayFast x).data.toList = encodeBEU byteSize x.toNat := by
+  unfold toBEByteArrayFast
+  have hoff : (0 : USize).toNat = 0 := by simp
+  have hoff' : (0 : USize).toNat + 32 < USize.size := by
+    rw [hoff]
+    rw [USize.size_eq_two_pow]
+    cases System.Platform.numBits_eq with
+    | inl h => simp [h]
+    | inr h => simp [h]
+  rw [writeBEAt_eq x (ByteArray.mk (Array.replicate byteSize 0)) (0 : USize)
+      (by
+        have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = byteSize := by
+          simp only [ByteArray.size, Array.size_replicate]
+        rw [hmk]; simp)
+      hoff', hoff]
+  simp [toBEBytes, Array.toList_replicate]
+
+/-- The swap the compiler acts on. -/
+@[csimp] theorem toBEByteArray_eq_fast : @toBEByteArray = @toBEByteArrayFast := by
+  funext x
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj]
+  simp only [toBEByteArray, encodeBEBytes, List.data_toByteArray, List.toList_toArray,
+    toBEByteArrayFast_data]
+
+/-- The four limbs written straight into a pre-sized zero buffer, least
+significant limb first.  One allocation, then 32 unchecked `ByteArray.uset`s. -/
+def toLEByteArrayFast (x : UInt256) : ByteArray :=
+  writeLEAt x (ByteArray.mk (Array.replicate byteSize 0)) (0 : USize)
+    (by
+      have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = byteSize := by
+        simp only [ByteArray.size, Array.size_replicate]
+      rw [hmk]
+      simp)
+
+/-- The fast encoder's data is the width-32 encoding. -/
+private theorem toLEByteArrayFast_data (x : UInt256) :
+    (toLEByteArrayFast x).data.toList = encodeLEU byteSize x.toNat := by
+  unfold toLEByteArrayFast
+  have hoff : (0 : USize).toNat = 0 := by simp
+  have hoff' : (0 : USize).toNat + 32 < USize.size := by
+    rw [hoff]
+    rw [USize.size_eq_two_pow]
+    cases System.Platform.numBits_eq with
+    | inl h => simp [h]
+    | inr h => simp [h]
+  rw [writeLEAt_eq x (ByteArray.mk (Array.replicate byteSize 0)) (0 : USize)
+      (by
+        have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = byteSize := by
+          simp only [ByteArray.size, Array.size_replicate]
+        rw [hmk]; simp)
+      hoff', hoff]
+  simp [toLEBytes, Array.toList_replicate]
+
+/-- The swap the compiler acts on for the little-endian encoder. -/
+@[csimp] theorem toLEByteArray_eq_fast : @toLEByteArray = @toLEByteArrayFast := by
+  funext x
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj]
+  simp only [toLEByteArray, encodeLEBytes, List.data_toByteArray, List.toList_toArray,
+    toLEByteArrayFast_data]
 
 /-- **Refinement**: the `ByteArray` encoder agrees with the `List UInt8` encoder. -/
 theorem toList_toBEByteArray (x : UInt256) :
