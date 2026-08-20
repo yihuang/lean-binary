@@ -139,16 +139,15 @@ def pushLEChunk (len : Nat) (x : UInt64) (acc : ByteArray) : ByteArray :=
   | l + 1 => pushLEChunk l (x >>> 8) (acc.push x.toUInt8)
 
 /-- The low `len` bytes of a machine word pushed onto a `ByteArray`, most
-significant first: recurse on the higher bytes, then push. -/
+significant first.  Build the big-endian chunk as a list, then push the bytes
+one at a time so the accumulator stays uniquely referenced. -/
 def pushBEChunk (len : Nat) (x : UInt64) (acc : ByteArray) : ByteArray :=
-  match len with
-  | 0 => acc
-  | l + 1 => (pushBEChunk l (x >>> 8) acc).push x.toUInt8
+  (beChunk len x []).foldl (fun a b => a.push b) acc
 
-/-- `pushBEChunk 8` unrolled straight-line.  `pushBEChunk` takes its
-accumulator *borrowed*, so a caller that hands it the buffer it is building
-pays a full copy per chunk; straight-line pushes keep the buffer uniquely
-referenced, so every push lands in place. -/
+/-- `pushBEChunk 8` unrolled straight-line.  The generic list-based
+`pushBEChunk` avoids the old borrowed-accumulator copies, but still allocates
+a small chunk list; straight-line pushes keep the buffer uniquely referenced
+and also avoid that temporary list, so every push lands in place. -/
 def pushLimb (x : UInt64) (acc : ByteArray) : ByteArray :=
   let x1 := x >>> 8
   let x2 := x1 >>> 8
@@ -185,11 +184,19 @@ theorem pushLEChunk_eq (len : Nat) (x : UInt64) (acc : ByteArray) :
 
 theorem pushBEChunk_eq (len : Nat) (x : UInt64) (acc : ByteArray) :
     (pushBEChunk len x acc).data.toList = acc.data.toList ++ encodeBEU len x.toNat := by
-  induction len generalizing x with
-  | zero => simp [pushBEChunk, encodeBEU, natsToUInt8, encodeBE, encodeLE]
-  | succ l ih =>
-      rw [pushBEChunk, ByteArray.data_push, Array.toList_push, ih, toNat_shiftRight_eight,
-        encodeBEU_succ, toUInt8_eq_ofNat_mod, List.append_assoc]
+  unfold pushBEChunk
+  have hfold : (List.foldl (fun (a : ByteArray) b => a.push b) acc (beChunk len x [])).data
+             = List.foldl (fun (a : Array UInt8) b => a.push b) acc.data (beChunk len x []) := by
+    induction (beChunk len x []) generalizing acc with
+    | nil => rfl
+    | cons b bs ih =>
+        simp [List.foldl, ih, ByteArray.data_push]
+  rw [hfold]
+  rw [List.foldl_push_eq_append]
+  rw [Array.toList_append]
+  rw [List.toList_toArray]
+  rw [beChunk_eq]
+  simp
 
 /-- `pushLimb` is `pushBEChunk 8` definitionally, so its law is that one's. -/
 theorem pushLimb_eq (x : UInt64) (acc : ByteArray) :
