@@ -32,10 +32,11 @@ Contents:
 * and the limb-direct entry points that make the representation pay —
   `toBEByteArrayFast` and `toLEByteArrayFast`, swapped in for the generic
   `ByteArray` encoders by `@[csimp]`, `pushBE` / `pushLE` for appending a
-  word to an existing buffer in place, and `ofBEByteArrayAt` for reading a
-  big-endian word at a known offset, with `toNat_ofBEByteArrayAt` as its
-  agreement.  None of these builds a `Nat`; asking one of their results for
-  its `toNat` gives the cost straight back.
+  word to an existing buffer in place, `writeBEAt` / `writeLEAt` for writing
+  a word into a pre-sized buffer at an offset, and `ofBEByteArrayAt` for
+  reading a big-endian word at a known offset, with `toNat_ofBEByteArrayAt`
+  as its agreement.  None of these builds a `Nat`; asking one of their
+  results for its `toNat` gives the cost straight back.
 -/
 
 namespace Binary
@@ -776,6 +777,329 @@ theorem pushLE_eq (x : UInt256) (acc : ByteArray) :
   unfold pushLE
   simp only [pushLELimb_eq, List.append_assoc]
   rw [encodeLEU_byteSize_limbs x]
+  simp [List.append_assoc]
+
+private theorem byteArray_size_set (ba : ByteArray) (i : Nat) (v : UInt8) (h : i < ba.size) :
+    (ba.set i v h).size = ba.size := by
+  cases ba with
+  | mk data =>
+    simp [ByteArray.set, ByteArray.size, Array.size_set h]
+
+private def write8At (ba : ByteArray) (off : Nat) (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8)
+    (h : off + 8 ≤ ba.size) : ByteArray :=
+  let ba1 := ba.set off b0 (by omega)
+  have h1 : ba1.size = ba.size := byteArray_size_set ba off b0 (by omega)
+  let ba2 := ba1.set (off + 1) b1 (by rw [h1]; omega)
+  have h2 : ba2.size = ba.size := by
+    rw [show ba2.size = ba1.size from byteArray_size_set ba1 (off + 1) b1 (by rw [h1]; omega), h1]
+  let ba3 := ba2.set (off + 2) b2 (by rw [h2]; omega)
+  have h3 : ba3.size = ba.size := by
+    rw [show ba3.size = ba2.size from byteArray_size_set ba2 (off + 2) b2 (by rw [h2]; omega), h2]
+  let ba4 := ba3.set (off + 3) b3 (by rw [h3]; omega)
+  have h4 : ba4.size = ba.size := by
+    rw [show ba4.size = ba3.size from byteArray_size_set ba3 (off + 3) b3 (by rw [h3]; omega), h3]
+  let ba5 := ba4.set (off + 4) b4 (by rw [h4]; omega)
+  have h5 : ba5.size = ba.size := by
+    rw [show ba5.size = ba4.size from byteArray_size_set ba4 (off + 4) b4 (by rw [h4]; omega), h4]
+  let ba6 := ba5.set (off + 5) b5 (by rw [h5]; omega)
+  have h6 : ba6.size = ba.size := by
+    rw [show ba6.size = ba5.size from byteArray_size_set ba5 (off + 5) b5 (by rw [h5]; omega), h5]
+  let ba7 := ba6.set (off + 6) b6 (by rw [h6]; omega)
+  have h7 : ba7.size = ba.size := by
+    rw [show ba7.size = ba6.size from byteArray_size_set ba6 (off + 6) b6 (by rw [h6]; omega), h6]
+  ba7.set (off + 7) b7 (by rw [h7]; omega)
+
+private theorem write8At_size (ba : ByteArray) (off : Nat) (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8)
+    (h : off + 8 ≤ ba.size) : (write8At ba off b0 b1 b2 b3 b4 b5 b6 b7 h).size = ba.size := by
+  unfold write8At
+  simp [byteArray_size_set]
+
+private def writeBELimbAt (x : UInt64) (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) : ByteArray :=
+  write8At ba off (x >>> 56).toUInt8 (x >>> 48).toUInt8 (x >>> 40).toUInt8
+    (x >>> 32).toUInt8 (x >>> 24).toUInt8 (x >>> 16).toUInt8 (x >>> 8).toUInt8 (x >>> 0).toUInt8 h
+
+private theorem writeBELimbAt_size (x : UInt64) (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) :
+    (writeBELimbAt x ba off h).size = ba.size := by
+  unfold writeBELimbAt
+  exact write8At_size ba off (x >>> 56).toUInt8 (x >>> 48).toUInt8 (x >>> 40).toUInt8
+    (x >>> 32).toUInt8 (x >>> 24).toUInt8 (x >>> 16).toUInt8 (x >>> 8).toUInt8 (x >>> 0).toUInt8 h
+
+private def writeLELimbAt (x : UInt64) (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) : ByteArray :=
+  write8At ba off (x >>> 0).toUInt8 (x >>> 8).toUInt8 (x >>> 16).toUInt8
+    (x >>> 24).toUInt8 (x >>> 32).toUInt8 (x >>> 40).toUInt8 (x >>> 48).toUInt8 (x >>> 56).toUInt8 h
+
+private theorem writeLELimbAt_size (x : UInt64) (ba : ByteArray) (off : Nat) (h : off + 8 ≤ ba.size) :
+    (writeLELimbAt x ba off h).size = ba.size := by
+  unfold writeLELimbAt
+  exact write8At_size ba off (x >>> 0).toUInt8 (x >>> 8).toUInt8 (x >>> 16).toUInt8
+    (x >>> 24).toUInt8 (x >>> 32).toUInt8 (x >>> 40).toUInt8 (x >>> 48).toUInt8 (x >>> 56).toUInt8 h
+
+/-- Write the big-endian encoding of `x` into `ba` at offset `off`.  The proof
+`off + 32 ≤ ba.size` is erased at runtime, so the writes are unchecked and, on
+a uniquely-referenced buffer, land in place. -/
+def writeBEAt (x : UInt256) (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) : ByteArray :=
+  let ba1 := writeBELimbAt x.l0 ba off (by omega)
+  have h1 : ba1.size = ba.size := writeBELimbAt_size x.l0 ba off (by omega)
+  let ba2 := writeBELimbAt x.l1 ba1 (off + 8) (by rw [h1]; omega)
+  have h2 : ba2.size = ba.size := by
+    rw [show ba2.size = ba1.size from writeBELimbAt_size x.l1 ba1 (off + 8) (by rw [h1]; omega), h1]
+  let ba3 := writeBELimbAt x.l2 ba2 (off + 16) (by rw [h2]; omega)
+  have h3 : ba3.size = ba.size := by
+    rw [show ba3.size = ba2.size from writeBELimbAt_size x.l2 ba2 (off + 16) (by rw [h2]; omega), h2]
+  writeBELimbAt x.l3 ba3 (off + 24) (by rw [h3]; omega)
+
+/-- Write the little-endian encoding of `x` into `ba` at offset `off`. -/
+def writeLEAt (x : UInt256) (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) : ByteArray :=
+  let ba1 := writeLELimbAt x.l3 ba off (by omega)
+  have h1 : ba1.size = ba.size := writeLELimbAt_size x.l3 ba off (by omega)
+  let ba2 := writeLELimbAt x.l2 ba1 (off + 8) (by rw [h1]; omega)
+  have h2 : ba2.size = ba.size := by
+    rw [show ba2.size = ba1.size from writeLELimbAt_size x.l2 ba1 (off + 8) (by rw [h1]; omega), h1]
+  let ba3 := writeLELimbAt x.l1 ba2 (off + 16) (by rw [h2]; omega)
+  have h3 : ba3.size = ba.size := by
+    rw [show ba3.size = ba2.size from writeLELimbAt_size x.l1 ba2 (off + 16) (by rw [h2]; omega), h2]
+  writeLELimbAt x.l0 ba3 (off + 24) (by rw [h3]; omega)
+
+/-- `writeBEAt` preserves the buffer size. -/
+theorem size_writeBEAt (x : UInt256) (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) :
+    (writeBEAt x ba off h).size = ba.size := by
+  unfold writeBEAt
+  simp [writeBELimbAt_size]
+
+/-- `writeLEAt` preserves the buffer size. -/
+theorem size_writeLEAt (x : UInt256) (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) :
+    (writeLEAt x ba off h).size = ba.size := by
+  unfold writeLEAt
+  simp [writeLELimbAt_size]
+
+/-! ### spec equivalence for the in-place writers
+
+`write8At` is a chain of eight `ByteArray.set`s, so its law is proved at the
+`List` level: one `set` is one byte spliced into the list (`Array.toList_set`
+takes `ByteArray.set` down to `List.set`, and
+`List.set_eq_take_append_cons_drop` is the splice), and the chain is folded
+by `spliceFrom` below, whose law is a one-step induction.  The limb writers
+and the four-limb writers are then that law four times over, plus `take` /
+`drop` algebra: every rewrite is one of the same two facts — a `take` into
+the middle of a splice stops after the spliced bytes, a `drop` past it lands
+in the tail. -/
+
+/-- One `ByteArray.set`, as one `List.set` on the data. -/
+private theorem byteArray_set_toList (ba : ByteArray) (i : Nat) (v : UInt8)
+    (h : i < ba.size) :
+    (ba.set i v h).data.toList = ba.data.toList.set i v := by
+  cases ba; rfl
+
+/-- The list-level writer `write8At` denotes: set the given bytes at
+consecutive indices starting at `off`. -/
+private def spliceFrom (l : List UInt8) (off : Nat) : List UInt8 → List UInt8
+  | [] => l
+  | b :: bs => spliceFrom (l.set off b) (off + 1) bs
+
+/-- The general law of `write8At`, at any width: keep the first `off` bytes,
+write the given bytes, leave the rest. -/
+private theorem spliceFrom_eq : ∀ (bs : List UInt8) (l : List UInt8) (off : Nat),
+    off + bs.length ≤ l.length →
+    spliceFrom l off bs = l.take off ++ bs ++ l.drop (off + bs.length)
+  | [], l, off, _ => by simp [spliceFrom]
+  | b :: bs, l, off, h => by
+      simp only [List.length_cons] at h
+      have hoff : (l.take off).length = off := by
+        rw [List.length_take, Nat.min_eq_left (by omega)]
+      rw [spliceFrom,
+        spliceFrom_eq bs (l.set off b) (off + 1) (by simp only [List.length_set]; omega),
+        List.take_set, List.set_eq_take_append_cons_drop,
+        if_pos (by rw [List.length_take]; omega),
+        List.take_take, Nat.min_eq_left (by omega : off ≤ off + 1),
+        List.drop_take, show off + 1 - (off + 1) = 0 from by omega, List.take_zero,
+        List.drop_set, if_pos (by omega),
+        List.length_cons, show off + (bs.length + 1) = off + 1 + bs.length from by omega]
+      simp
+
+/-- `write8At` is the splice: `off` bytes, the eight written, the rest. -/
+private theorem write8At_toList (ba : ByteArray) (off : Nat)
+    (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8) (h : off + 8 ≤ ba.size) :
+    (write8At ba off b0 b1 b2 b3 b4 b5 b6 b7 h).data.toList =
+      ba.data.toList.take off ++ [b0, b1, b2, b3, b4, b5, b6, b7]
+        ++ ba.data.toList.drop (off + 8) := by
+  have hlen : off + [b0, b1, b2, b3, b4, b5, b6, b7].length ≤ ba.data.toList.length := by
+    rw [← ByteArray.size_eq_toList_length]; simpa using h
+  have e : (write8At ba off b0 b1 b2 b3 b4 b5 b6 b7 h).data.toList
+      = spliceFrom ba.data.toList off [b0, b1, b2, b3, b4, b5, b6, b7] := by
+    unfold write8At
+    simp only [byteArray_set_toList]
+    rfl
+  rw [e, spliceFrom_eq _ _ _ hlen]
+  simp
+
+/-- A `take` into the middle of a splice takes the prefix and the spliced
+bytes. -/
+private theorem take_append_splice (P D B : List UInt8) (k : Nat)
+    (hP : P.length + B.length = k) :
+    (P ++ B ++ D).take k = P ++ B := by
+  rw [List.append_assoc, List.take_append,
+    List.take_of_length_le (by omega), show k - P.length = B.length from by omega,
+    List.take_left' rfl]
+
+/-- A `drop` past a splice lands in the tail. -/
+private theorem drop_append_splice (P D B : List UInt8) (k j : Nat)
+    (hP : P.length + B.length = k) :
+    (P ++ B ++ D).drop (k + j) = D.drop j := by
+  rw [List.append_assoc, List.drop_append,
+    List.drop_eq_nil_of_le (by omega : P.length ≤ k + j),
+    show k + j - P.length = B.length + j from by omega, List.nil_append,
+    List.drop_length_add_append]
+
+/-- A width-8 big-endian encoding is the eight shifted-out bytes, most
+significant first. -/
+private theorem encodeBEU_8_bytes (x : UInt64) :
+    encodeBEU 8 x.toNat =
+      [(x >>> 56).toUInt8, (x >>> 48).toUInt8, (x >>> 40).toUInt8, (x >>> 32).toUInt8,
+       (x >>> 24).toUInt8, (x >>> 16).toUInt8, (x >>> 8).toUInt8, (x >>> 0).toUInt8] := by
+  have e0 : (x >>> 0).toUInt8 = UInt8.ofNat (x.toNat % 256) := toUInt8_eq_ofNat_mod x
+  have e1 : (x >>> 8).toUInt8 = UInt8.ofNat (x.toNat / 256 ^ 1 % 256) :=
+    toUInt8_shiftRight_digit x (l := 1) (by omega)
+  have e2 : (x >>> 16).toUInt8 = UInt8.ofNat (x.toNat / 256 ^ 2 % 256) :=
+    toUInt8_shiftRight_digit x (l := 2) (by omega)
+  have e3 : (x >>> 24).toUInt8 = UInt8.ofNat (x.toNat / 256 ^ 3 % 256) :=
+    toUInt8_shiftRight_digit x (l := 3) (by omega)
+  have e4 : (x >>> 32).toUInt8 = UInt8.ofNat (x.toNat / 256 ^ 4 % 256) :=
+    toUInt8_shiftRight_digit x (l := 4) (by omega)
+  have e5 : (x >>> 40).toUInt8 = UInt8.ofNat (x.toNat / 256 ^ 5 % 256) :=
+    toUInt8_shiftRight_digit x (l := 5) (by omega)
+  have e6 : (x >>> 48).toUInt8 = UInt8.ofNat (x.toNat / 256 ^ 6 % 256) :=
+    toUInt8_shiftRight_digit x (l := 6) (by omega)
+  have e7 : (x >>> 56).toUInt8 = UInt8.ofNat (x.toNat / 256 ^ 7 % 256) :=
+    toUInt8_shiftRight_digit x (l := 7) (by omega)
+  rw [show (8 : Nat) = 7 + 1 from rfl, encodeBEU_cons 7 x.toNat,
+    show encodeBEU 7 x.toNat = encodeBEU (6 + 1) x.toNat from rfl, encodeBEU_cons 6 x.toNat,
+    show encodeBEU 6 x.toNat = encodeBEU (5 + 1) x.toNat from rfl, encodeBEU_cons 5 x.toNat,
+    show encodeBEU 5 x.toNat = encodeBEU (4 + 1) x.toNat from rfl, encodeBEU_cons 4 x.toNat,
+    show encodeBEU 4 x.toNat = encodeBEU (3 + 1) x.toNat from rfl, encodeBEU_cons 3 x.toNat,
+    show encodeBEU 3 x.toNat = encodeBEU (2 + 1) x.toNat from rfl, encodeBEU_cons 2 x.toNat,
+    show encodeBEU 2 x.toNat = encodeBEU (1 + 1) x.toNat from rfl, encodeBEU_cons 1 x.toNat,
+    show encodeBEU 1 x.toNat = encodeBEU (0 + 1) x.toNat from rfl, encodeBEU_cons 0 x.toNat,
+    Nat.pow_zero, Nat.div_one, e7, e6, e5, e4, e3, e2, e1, e0]
+  rfl
+
+/-- A width-8 little-endian encoding is the same bytes, least significant
+first — the big-endian one reversed. -/
+private theorem encodeLEU_8_bytes (x : UInt64) :
+    encodeLEU 8 x.toNat =
+      [(x >>> 0).toUInt8, (x >>> 8).toUInt8, (x >>> 16).toUInt8, (x >>> 24).toUInt8,
+       (x >>> 32).toUInt8, (x >>> 40).toUInt8, (x >>> 48).toUInt8, (x >>> 56).toUInt8] := by
+  have h : encodeLEU 8 x.toNat = (encodeBEU 8 x.toNat).reverse := by
+    simp [encodeLEU, encodeBEU, encodeBE, natsToUInt8, List.map_reverse,
+      List.reverse_reverse]
+  rw [h, encodeBEU_8_bytes]
+  rfl
+
+/-- `writeBELimbAt` splices the limb's big-endian eight bytes in. -/
+private theorem writeBELimbAt_toList (x : UInt64) (ba : ByteArray) (off : Nat)
+    (h : off + 8 ≤ ba.size) :
+    (writeBELimbAt x ba off h).data.toList =
+      ba.data.toList.take off ++ encodeBEU 8 x.toNat ++ ba.data.toList.drop (off + 8) := by
+  unfold writeBELimbAt
+  rw [write8At_toList, ← encodeBEU_8_bytes x]
+
+/-- `writeLELimbAt` splices the limb's little-endian eight bytes in. -/
+private theorem writeLELimbAt_toList (x : UInt64) (ba : ByteArray) (off : Nat)
+    (h : off + 8 ≤ ba.size) :
+    (writeLELimbAt x ba off h).data.toList =
+      ba.data.toList.take off ++ encodeLEU 8 x.toNat ++ ba.data.toList.drop (off + 8) := by
+  unfold writeLELimbAt
+  rw [write8At_toList, ← encodeLEU_8_bytes x]
+
+/-- Spec equivalence for `writeBEAt`: it splices the big-endian encoding into
+`ba` at `off`, leaving all other bytes unchanged. -/
+theorem writeBEAt_eq (x : UInt256) (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) :
+    (writeBEAt x ba off h).data.toList =
+      ba.data.toList.take off ++ toBEBytes x ++ ba.data.toList.drop (off + 32) := by
+  have hlen : off + 32 ≤ ba.data.toList.length := by
+    rw [← ByteArray.size_eq_toList_length]; exact h
+  have hoff : (ba.data.toList.take off).length = off := by
+    rw [List.length_take, Nat.min_eq_left (by omega)]
+  have hE : ∀ y : UInt64, (encodeBEU 8 y.toNat).length = 8 :=
+    fun y => length_encodeBEU 8 y.toNat
+  -- the `have`s in the definition are size bookkeeping, not value
+  show (writeBELimbAt x.l3
+      (writeBELimbAt x.l2
+        (writeBELimbAt x.l1 (writeBELimbAt x.l0 ba off (by omega)) (off + 8)
+          (by simp only [writeBELimbAt_size]; omega))
+        (off + 16) (by simp only [writeBELimbAt_size]; omega))
+      (off + 24) (by simp only [writeBELimbAt_size]; omega)).data.toList = _
+  -- each limb write splices its eight bytes in
+  rw [writeBELimbAt_toList, writeBELimbAt_toList, writeBELimbAt_toList,
+    writeBELimbAt_toList]
+  -- and the nested takes and drops collapse, limb by limb
+  rw [take_append_splice (ba.data.toList.take off) (ba.data.toList.drop (off + 8))
+      (encodeBEU 8 x.l0.toNat) (off + 8) (by simp only [hoff, hE]),
+    drop_append_splice (ba.data.toList.take off) (ba.data.toList.drop (off + 8))
+      (encodeBEU 8 x.l0.toNat) (off + 8) 8 (by simp only [hoff, hE]),
+    List.drop_drop,
+    take_append_splice (ba.data.toList.take off ++ encodeBEU 8 x.l0.toNat)
+      (ba.data.toList.drop (off + 8 + 8)) (encodeBEU 8 x.l1.toNat) (off + 16)
+      (by simp only [List.length_append, hoff, hE]),
+    drop_append_splice (ba.data.toList.take off ++ encodeBEU 8 x.l0.toNat)
+      (ba.data.toList.drop (off + 8 + 8)) (encodeBEU 8 x.l1.toNat) (off + 16) 8
+      (by simp only [List.length_append, hoff, hE]),
+    List.drop_drop,
+    take_append_splice (ba.data.toList.take off ++ encodeBEU 8 x.l0.toNat
+        ++ encodeBEU 8 x.l1.toNat)
+      (ba.data.toList.drop (off + 8 + 8 + 8)) (encodeBEU 8 x.l2.toNat) (off + 24)
+      (by simp only [List.length_append, hoff, hE]),
+    drop_append_splice (ba.data.toList.take off ++ encodeBEU 8 x.l0.toNat
+        ++ encodeBEU 8 x.l1.toNat)
+      (ba.data.toList.drop (off + 8 + 8 + 8)) (encodeBEU 8 x.l2.toNat) (off + 24) 8
+      (by simp only [List.length_append, hoff, hE])]
+  rw [show off + 8 + 8 + 8 + 8 = off + 32 from by omega,
+    show toBEBytes x = encodeBEU byteSize x.toNat from rfl, encodeBEU_byteSize_limbs]
+  simp [List.append_assoc]
+
+/-- Spec equivalence for `writeLEAt`: it splices the little-endian encoding into
+`ba` at `off`, leaving all other bytes unchanged. -/
+theorem writeLEAt_eq (x : UInt256) (ba : ByteArray) (off : Nat) (h : off + 32 ≤ ba.size) :
+    (writeLEAt x ba off h).data.toList =
+      ba.data.toList.take off ++ toLEBytes x ++ ba.data.toList.drop (off + 32) := by
+  have hlen : off + 32 ≤ ba.data.toList.length := by
+    rw [← ByteArray.size_eq_toList_length]; exact h
+  have hoff : (ba.data.toList.take off).length = off := by
+    rw [List.length_take, Nat.min_eq_left (by omega)]
+  have hE : ∀ y : UInt64, (encodeLEU 8 y.toNat).length = 8 :=
+    fun y => length_encodeLEU 8 y.toNat
+  -- the `have`s in the definition are size bookkeeping, not value
+  show (writeLELimbAt x.l0
+      (writeLELimbAt x.l1
+        (writeLELimbAt x.l2 (writeLELimbAt x.l3 ba off (by omega)) (off + 8)
+          (by simp only [writeLELimbAt_size]; omega))
+        (off + 16) (by simp only [writeLELimbAt_size]; omega))
+      (off + 24) (by simp only [writeLELimbAt_size]; omega)).data.toList = _
+  -- each limb write splices its eight bytes in
+  rw [writeLELimbAt_toList, writeLELimbAt_toList, writeLELimbAt_toList,
+    writeLELimbAt_toList]
+  -- and the nested takes and drops collapse, limb by limb
+  rw [take_append_splice (ba.data.toList.take off) (ba.data.toList.drop (off + 8))
+      (encodeLEU 8 x.l3.toNat) (off + 8) (by simp only [hoff, hE]),
+    drop_append_splice (ba.data.toList.take off) (ba.data.toList.drop (off + 8))
+      (encodeLEU 8 x.l3.toNat) (off + 8) 8 (by simp only [hoff, hE]),
+    List.drop_drop,
+    take_append_splice (ba.data.toList.take off ++ encodeLEU 8 x.l3.toNat)
+      (ba.data.toList.drop (off + 8 + 8)) (encodeLEU 8 x.l2.toNat) (off + 16)
+      (by simp only [List.length_append, hoff, hE]),
+    drop_append_splice (ba.data.toList.take off ++ encodeLEU 8 x.l3.toNat)
+      (ba.data.toList.drop (off + 8 + 8)) (encodeLEU 8 x.l2.toNat) (off + 16) 8
+      (by simp only [List.length_append, hoff, hE]),
+    List.drop_drop,
+    take_append_splice (ba.data.toList.take off ++ encodeLEU 8 x.l3.toNat
+        ++ encodeLEU 8 x.l2.toNat)
+      (ba.data.toList.drop (off + 8 + 8 + 8)) (encodeLEU 8 x.l1.toNat) (off + 24)
+      (by simp only [List.length_append, hoff, hE]),
+    drop_append_splice (ba.data.toList.take off ++ encodeLEU 8 x.l3.toNat
+        ++ encodeLEU 8 x.l2.toNat)
+      (ba.data.toList.drop (off + 8 + 8 + 8)) (encodeLEU 8 x.l1.toNat) (off + 24) 8
+      (by simp only [List.length_append, hoff, hE])]
+  rw [show off + 8 + 8 + 8 + 8 = off + 32 from by omega,
+    show toLEBytes x = encodeLEU byteSize x.toNat from rfl, encodeLEU_byteSize_limbs]
   simp [List.append_assoc]
 
 /-- **Refinement**: the `ByteArray` encoder agrees with the `List UInt8` encoder. -/
