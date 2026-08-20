@@ -847,7 +847,7 @@ private theorem write8At_size (ba : ByteArray) (off : USize) (b0 b1 b2 b3 b4 b5 
   unfold write8At
   simp [byteArray_size_uset]
 
-private def writeBELimbAt (x : UInt64) (ba : ByteArray) (off : USize) (h : off.toNat + 8 ≤ ba.size) : ByteArray :=
+def writeBELimbAt (x : UInt64) (ba : ByteArray) (off : USize) (h : off.toNat + 8 ≤ ba.size) : ByteArray :=
   write8At ba off (x >>> 56).toUInt8 (x >>> 48).toUInt8 (x >>> 40).toUInt8
     (x >>> 32).toUInt8 (x >>> 24).toUInt8 (x >>> 16).toUInt8 (x >>> 8).toUInt8 (x >>> 0).toUInt8 h
 
@@ -857,7 +857,7 @@ private theorem writeBELimbAt_size (x : UInt64) (ba : ByteArray) (off : USize) (
   exact write8At_size ba off (x >>> 56).toUInt8 (x >>> 48).toUInt8 (x >>> 40).toUInt8
     (x >>> 32).toUInt8 (x >>> 24).toUInt8 (x >>> 16).toUInt8 (x >>> 8).toUInt8 (x >>> 0).toUInt8 h
 
-private def writeLELimbAt (x : UInt64) (ba : ByteArray) (off : USize) (h : off.toNat + 8 ≤ ba.size) : ByteArray :=
+def writeLELimbAt (x : UInt64) (ba : ByteArray) (off : USize) (h : off.toNat + 8 ≤ ba.size) : ByteArray :=
   write8At ba off (x >>> 0).toUInt8 (x >>> 8).toUInt8 (x >>> 16).toUInt8
     (x >>> 24).toUInt8 (x >>> 32).toUInt8 (x >>> 40).toUInt8 (x >>> 48).toUInt8 (x >>> 56).toUInt8 h
 
