@@ -670,8 +670,8 @@ about. -/
 
 /-- The four limbs pushed straight out, most significant first. -/
 def toBEByteArrayFast (x : UInt256) : ByteArray :=
-  pushBEChunk 8 x.l3 (pushBEChunk 8 x.l2 (pushBEChunk 8 x.l1
-    (pushBEChunk 8 x.l0 (ByteArray.emptyWithCapacity byteSize))))
+  pushLimb x.l3 (pushLimb x.l2 (pushLimb x.l1
+    (pushLimb x.l0 (ByteArray.emptyWithCapacity byteSize))))
 
 /-- The width-32 encoding is the four limb encodings in order.  Each step
 splits eight bytes off the bottom with `encodeBEU_add`; each limb is then the
@@ -707,7 +707,7 @@ private theorem encodeBEU_byteSize_limbs (x : UInt256) :
   apply ByteArray.data_inj
   rw [← Array.toList_inj]
   simp only [toBEByteArray, encodeBEBytes, List.data_toByteArray, List.toList_toArray,
-    toBEByteArrayFast, pushBEChunk_eq,
+    toBEByteArrayFast, pushLimb_eq,
     show (ByteArray.emptyWithCapacity byteSize).data.toList = [] from rfl, List.nil_append]
   exact encodeBEU_byteSize_limbs x
 
