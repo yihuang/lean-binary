@@ -187,15 +187,8 @@ theorem pushBEChunk_eq (len : Nat) (x : UInt64) (acc : ByteArray) :
   unfold pushBEChunk
   have hfold : (List.foldl (fun (a : ByteArray) b => a.push b) acc (beChunk len x [])).data
              = List.foldl (fun (a : Array UInt8) b => a.push b) acc.data (beChunk len x []) := by
-    induction (beChunk len x []) generalizing acc with
-    | nil => rfl
-    | cons b bs ih =>
-        simp [List.foldl, ih, ByteArray.data_push]
-  rw [hfold]
-  rw [List.foldl_push_eq_append]
-  rw [Array.toList_append]
-  rw [List.toList_toArray]
-  rw [beChunk_eq]
+    induction (beChunk len x []) generalizing acc <;> simp [List.foldl, *]
+  rw [hfold, List.foldl_push_eq_append, Array.toList_append, List.toList_toArray, beChunk_eq]
   simp
 
 /-- `pushLimb` is `pushBEChunk 8` definitionally, so its law is that one's. -/
