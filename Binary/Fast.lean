@@ -67,13 +67,11 @@ theorem shiftRight_64 (n : Nat) : n >>> 64 = n / 256 ^ 8 := by
 theorem shiftLeft_64 (n : Nat) : n <<< 64 = n * 256 ^ 8 := by
   rw [Nat.shiftLeft_eq, two_pow_64_eq]
 
-/-- Shifting distributes over addition. -/
-theorem shiftLeft_add (a b k : Nat) : (a + b) <<< k = (a <<< k) + (b <<< k) := by
+/-- Shifting distributes over addition.  Named after core's `Int.add_shiftLeft`,
+which is this statement one type up; core has no `Nat` counterpart.  Not to be
+confused with `Nat.shiftLeft_add`, which composes two shifts. -/
+theorem add_shiftLeft (a b k : Nat) : (a + b) <<< k = (a <<< k) + (b <<< k) := by
   rw [Nat.shiftLeft_eq, Nat.add_mul, ← Nat.shiftLeft_eq, ← Nat.shiftLeft_eq]
-
-/-- Shifts compose by adding their offsets. -/
-theorem shiftLeft_shiftLeft (a k m : Nat) : (a <<< k) <<< m = a <<< (k + m) := by
-  rw [Nat.shiftLeft_eq, Nat.shiftLeft_eq, Nat.shiftLeft_eq, Nat.pow_add, Nat.mul_assoc]
 
 /-- `256 ^ len` divides `2 ^ 64` whenever `len ≤ 8`: the side condition that
 lets a `len`-byte encoding be read out of a truncating `UInt64`. -/
@@ -421,7 +419,7 @@ theorem decodeLEUFast.loop_eq (acc k : Nat) (bs : List UInt8) :
         show ([b0, b1, b2, b3, b4, b5, b6, b7] : List UInt8).length = 8 from rfl,
         Nat.mul_comm (256 ^ 8) (decodeLEU rest), ← shiftLeft_64,
         show k + 64 = 64 + k by omega,
-        shiftLeft_add, ← shiftLeft_shiftLeft, Nat.add_assoc]
+        add_shiftLeft, Nat.shiftLeft_add, Nat.add_assoc]
   | case2 acc k bs hne =>
       rw [decodeLEUFast.loop, decodeLEU_foldr]
       exact hne
