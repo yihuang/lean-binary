@@ -663,16 +663,6 @@ def ofBEByteArray (ba : ByteArray) : UInt256 := ofNat (decodeBEBytes ba)
 /-- Little-endian `ByteArray` → `UInt256`. -/
 def ofLEByteArray (ba : ByteArray) : UInt256 := ofNat (decodeLEBytes ba)
 
-/-- Append the big-endian encoding of `x` to an existing `ByteArray`.  When
-`acc` is uniquely referenced, every limb push lands in place. -/
-def pushBE (x : UInt256) (acc : ByteArray) : ByteArray :=
-  pushBELimb x.l3 (pushBELimb x.l2 (pushBELimb x.l1 (pushBELimb x.l0 acc)))
-
-/-- Append the little-endian encoding of `x` to an existing `ByteArray`. -/
-def pushLE (x : UInt256) (acc : ByteArray) : ByteArray :=
-  pushLELimb x.l0 (pushLELimb x.l1 (pushLELimb x.l2
-    (pushLELimb x.l3 acc)))
-
 /-! ### the encoder, limb-direct
 
 `toBEByteArray` above goes through `toNat`, which builds the bit vector and so
@@ -735,22 +725,6 @@ private theorem encodeLEU_byteSize_limbs (x : UInt256) :
     encodeLEU_add 8 8 (x.toNat / 256 ^ 8 / 256 ^ 8), d1, d2, hl3, hl2, hl1, hl0]
   simp [List.append_assoc]
 
-
-/-- `pushBE` appends the big-endian encoding. -/
-theorem pushBE_eq (x : UInt256) (acc : ByteArray) :
-    (pushBE x acc).data.toList = acc.data.toList ++ encodeBEU byteSize x.toNat := by
-  unfold pushBE
-  simp only [pushBELimb_eq, List.append_assoc]
-  rw [encodeBEU_byteSize_limbs x]
-  simp [List.append_assoc]
-
-/-- `pushLE` appends the little-endian encoding. -/
-theorem pushLE_eq (x : UInt256) (acc : ByteArray) :
-    (pushLE x acc).data.toList = acc.data.toList ++ encodeLEU byteSize x.toNat := by
-  unfold pushLE
-  simp only [pushLELimb_eq, List.append_assoc]
-  rw [encodeLEU_byteSize_limbs x]
-  simp [List.append_assoc]
 
 private theorem byteArray_size_set (ba : ByteArray) (i : Nat) (v : UInt8) (h : i < ba.size) :
     (ba.set i v h).size = ba.size := by
@@ -1198,13 +1172,74 @@ theorem writeLEAt_eq (x : UInt256) (ba : ByteArray) (off : USize)
     show toLEBytes x = encodeLEU byteSize x.toNat from rfl, encodeLEU_byteSize_limbs]
   simp [List.append_assoc]
 
-/-- The four limbs written straight into a pre-sized zero buffer, most
-significant first.  One allocation, then 32 unchecked `ByteArray.uset`s. -/
+/-- The grown buffer is large enough for the word at `USize.ofNat acc.size`. -/
+private theorem push_grow_ok (acc : ByteArray) :
+    (USize.ofNat acc.size).toNat + 32 ≤ (acc ++ ByteArray.mk (Array.replicate byteSize 0)).size := by
+  rw [USize.toNat_ofNat', ← USize.size_eq_two_pow, ByteArray.size_append]
+  have hmod : acc.size % USize.size ≤ acc.size := Nat.mod_le _ _
+  have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = 32 := by
+    simp [ByteArray.size, byteSize]
+  rw [hmk]; omega
+
+/-- Append the big-endian encoding of `x` to an existing `ByteArray`.  Grows
+the buffer once by appending the shared 32-byte zero constant, then writes the
+word in place with `writeBEAt` — faster than thirty-two checked `push`es on a
+unique buffer. -/
+def pushBE (x : UInt256) (acc : ByteArray) : ByteArray :=
+  writeBEAt x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
+    (push_grow_ok acc)
+
+/-- Append the little-endian encoding of `x` to an existing `ByteArray`.  Same
+`writeBEAt`-based growth as `pushBE`. -/
+def pushLE (x : UInt256) (acc : ByteArray) : ByteArray :=
+  writeLEAt x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
+    (push_grow_ok acc)
+
+/-- The splice of a 32-byte zero tail: the prefix is `acc`'s data, the part
+after the word is empty. -/
+private theorem append_replicate32_take_drop (acc : ByteArray) :
+    (acc.data.toList ++ List.replicate 32 0).take acc.size = acc.data.toList
+      ∧ (acc.data.toList ++ List.replicate 32 0).drop (acc.size + 32) = [] := by
+  have hlen : acc.data.toList.length = acc.size := by rw [ByteArray.size_eq_toList_length]
+  constructor
+  · rw [List.take_append, hlen]
+    rw [List.take_of_length_le (by omega), Nat.sub_self, List.take_zero, List.append_nil]
+  · rw [List.drop_append, hlen]
+    rw [List.drop_eq_nil_of_le (by omega), List.nil_append, Nat.add_sub_cancel_left]
+    simp
+
+/-- `pushBE` appends the big-endian encoding.  The overflow hypothesis is the
+runtime invariant behind the `USize` offset: the buffer plus one more word
+fits in the machine word. -/
+theorem pushBE_eq (x : UInt256) (acc : ByteArray) (h' : acc.size + 32 < USize.size) :
+    (pushBE x acc).data.toList = acc.data.toList ++ encodeBEU byteSize x.toNat := by
+  unfold pushBE
+  have hoff : (USize.ofNat acc.size).toNat = acc.size :=
+    USize.toNat_ofNat_of_lt' (by omega)
+  rw [writeBEAt_eq x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
+      (push_grow_ok acc) (by rw [hoff]; omega), hoff]
+  have htd := append_replicate32_take_drop acc
+  simp only [toBEBytes, ByteArray.toList_data_append, Array.toList_replicate]
+  rw [htd.1, htd.2, List.append_nil]
+
+/-- `pushLE` appends the little-endian encoding.  Same `USize`-offset contract
+as `pushBE_eq`. -/
+theorem pushLE_eq (x : UInt256) (acc : ByteArray) (h' : acc.size + 32 < USize.size) :
+    (pushLE x acc).data.toList = acc.data.toList ++ encodeLEU byteSize x.toNat := by
+  unfold pushLE
+  have hoff : (USize.ofNat acc.size).toNat = acc.size :=
+    USize.toNat_ofNat_of_lt' (by omega)
+  rw [writeLEAt_eq x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
+      (push_grow_ok acc) (by rw [hoff]; omega), hoff]
+  have htd := append_replicate32_take_drop acc
+  simp only [toLEBytes, ByteArray.toList_data_append, Array.toList_replicate]
+  rw [htd.1, htd.2, List.append_nil]
+
 def toBEByteArrayFast (x : UInt256) : ByteArray :=
   writeBEAt x (ByteArray.mk (Array.replicate byteSize 0)) (0 : USize)
     (by
-      have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = byteSize := by
-        simp only [ByteArray.size, Array.size_replicate]
+      have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = 32 := by
+        simp [ByteArray.size, byteSize]
       rw [hmk]
       simp)
 
@@ -1240,8 +1275,8 @@ significant limb first.  One allocation, then 32 unchecked `ByteArray.uset`s. -/
 def toLEByteArrayFast (x : UInt256) : ByteArray :=
   writeLEAt x (ByteArray.mk (Array.replicate byteSize 0)) (0 : USize)
     (by
-      have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = byteSize := by
-        simp only [ByteArray.size, Array.size_replicate]
+      have hmk : (ByteArray.mk (Array.replicate byteSize 0)).size = 32 := by
+        simp [ByteArray.size, byteSize]
       rw [hmk]
       simp)
 

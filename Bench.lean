@@ -161,6 +161,12 @@ def fillWriteAt (words : Nat) (hcap : words * 32 < USize.size) : ByteArray :=
   fillWriteAtAux words hcap 0 (by omega) (ByteArray.mk (Array.replicate (words * 32) 0))
     (by simp [ByteArray.size])
 
+def fillPushBE (words : Nat) : ByteArray := Id.run do
+  let mut b := ByteArray.emptyWithCapacity (words * 32)
+  for i in [0:words] do
+    b := UInt256.pushBE opWords[i % 256]! b
+  return b
+
 def benchOps : IO Unit := do
   IO.println "== word operations (2000 per call) =="
   timeItWords "and " 64 (fun i => opRun UInt256.and (2000 + i % 3))
@@ -274,6 +280,8 @@ def main : IO Unit := do
       cases System.Platform.numBits_eq with
       | inl h => simp [h]; omega
       | inr h => simp [h]; omega)).size)
+  IO.println "== append one word (push) =="
+  timeIt "pushBE             (now) " (fun i => (fillPushBE (64 + i % 3)).size)
   IO.println "== agreement (this is what the @[csimp] theorems assert) =="
   IO.println s!"  encodeBEU     {encodeBEU 32 w == encodeBEURef 32 w}   \
 encodeLEU     {encodeLEU 32 w == encodeLEURef 32 w}"
