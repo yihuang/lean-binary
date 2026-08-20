@@ -196,7 +196,8 @@ The window: `two_pow_64_eq`, `shiftRight_64`, `shiftLeft_64`,
 `pow256_dvd_two_pow_64`, `encodeLEU_window` / `encodeBEU_window`,
 `encodeLEU_chunk` / `encodeBEU_chunk`.
 Machine-word chunks: `leChunk_eq`, `beChunk_eq`, `pushLEChunk_eq`,
-`pushBEChunk_eq`, `toNat_foldl_beWordStep`, `toNat_beWord8`.
+`pushLELimb_eq`, `pushBEChunk_eq`, `pushBELimb_eq`, `toNat_foldl_beWordStep`,
+`toNat_beWord8`.
 Windowed reads: `window_peel`, `window_length`, `window_chunk8`,
 `decodeBEFromFast.byteLoop_eq`, `decodeBEFromFast.loop_eq`.
 The `@[csimp]` bridges: `encodeLEU_eq_fast`, `encodeBEU_eq_fast`,
@@ -297,7 +298,7 @@ style as core's `UInt8` … `UInt64`.
 - Byte codec (32 bytes): `toBEBytes`, `toLEBytes`, `ofBEBytes`, `ofLEBytes`
 - Roundtrips: `ofBEBytes_toBEBytes`, `ofLEBytes_toLEBytes`,
   `toBEBytes_ofBEBytes` / `toLEBytes_ofLEBytes` (given `bs.length = 32`)
-- `ByteArray` codec (32 bytes): `toBEByteArray`, `toLEByteArray`,
+- `ByteArray` codec (32 bytes): `toBEByteArray`, `toLEByteArray`, `pushBE`, `pushLE`,
   `ofBEByteArray`, `ofLEByteArray`
 - Refinement lemmas: `toList_toBEByteArray` / `toList_toLEByteArray` and
   `ofBEByteArray_eq_ofBEBytes` / `ofLEByteArray_eq_ofLEBytes` (the `ByteArray`

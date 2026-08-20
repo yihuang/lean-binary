@@ -29,11 +29,13 @@ Contents:
 * the `ByteArray` codec `toBEByteArray` / `toLEByteArray` / `ofBEByteArray` /
   `ofLEByteArray` with refinement lemmas (agreement with the `List UInt8`
   codec) and the four roundtrip theorems;
-* and the two limb-direct entry points that make the representation pay —
-  `toBEByteArrayFast`, swapped in for `toBEByteArray` by `@[csimp]`, and
-  `ofBEByteArrayAt` for reading a word at a known offset, with
-  `toNat_ofBEByteArrayAt` as its agreement.  Neither builds a `Nat`; asking
-  either result for its `toNat` gives the cost straight back.
+* and the limb-direct entry points that make the representation pay —
+  `toBEByteArrayFast` and `toLEByteArrayFast`, swapped in for the generic
+  `ByteArray` encoders by `@[csimp]`, `pushBE` / `pushLE` for appending a
+  word to an existing buffer in place, and `ofBEByteArrayAt` for reading a
+  big-endian word at a known offset, with `toNat_ofBEByteArrayAt` as its
+  agreement.  None of these builds a `Nat`; asking one of their results for
+  its `toNat` gives the cost straight back.
 -/
 
 namespace Binary
@@ -660,6 +662,16 @@ def ofBEByteArray (ba : ByteArray) : UInt256 := ofNat (decodeBEBytes ba)
 /-- Little-endian `ByteArray` → `UInt256`. -/
 def ofLEByteArray (ba : ByteArray) : UInt256 := ofNat (decodeLEBytes ba)
 
+/-- Append the big-endian encoding of `x` to an existing `ByteArray`.  When
+`acc` is uniquely referenced, every limb push lands in place. -/
+def pushBE (x : UInt256) (acc : ByteArray) : ByteArray :=
+  pushBELimb x.l3 (pushBELimb x.l2 (pushBELimb x.l1 (pushBELimb x.l0 acc)))
+
+/-- Append the little-endian encoding of `x` to an existing `ByteArray`. -/
+def pushLE (x : UInt256) (acc : ByteArray) : ByteArray :=
+  pushLELimb x.l0 (pushLELimb x.l1 (pushLELimb x.l2
+    (pushLELimb x.l3 acc)))
+
 /-! ### the encoder, limb-direct
 
 `toBEByteArray` above goes through `toNat`, which builds the bit vector and so
@@ -670,8 +682,7 @@ about. -/
 
 /-- The four limbs pushed straight out, most significant first. -/
 def toBEByteArrayFast (x : UInt256) : ByteArray :=
-  pushLimb x.l3 (pushLimb x.l2 (pushLimb x.l1
-    (pushLimb x.l0 (ByteArray.emptyWithCapacity byteSize))))
+  pushBE x (ByteArray.emptyWithCapacity byteSize)
 
 /-- The width-32 encoding is the four limb encodings in order.  Each step
 splits eight bytes off the bottom with `encodeBEU_add`; each limb is then the
@@ -707,10 +718,65 @@ private theorem encodeBEU_byteSize_limbs (x : UInt256) :
   apply ByteArray.data_inj
   rw [← Array.toList_inj]
   simp only [toBEByteArray, encodeBEBytes, List.data_toByteArray, List.toList_toArray,
-    toBEByteArrayFast, pushLimb_eq,
+    toBEByteArrayFast, pushBE, pushBELimb_eq,
     show (ByteArray.emptyWithCapacity byteSize).data.toList = [] from rfl, List.nil_append]
   exact encodeBEU_byteSize_limbs x
 
+/-- The four limbs pushed little-endian, least significant limb first. -/
+def toLEByteArrayFast (x : UInt256) : ByteArray :=
+  pushLE x (ByteArray.emptyWithCapacity byteSize)
+
+/-- The width-32 little-endian encoding is the four limb encodings in order,
+least significant limb first. -/
+private theorem encodeLEU_byteSize_limbs (x : UInt256) :
+    encodeLEU byteSize x.toNat =
+      encodeLEU 8 x.l3.toNat ++ encodeLEU 8 x.l2.toNat ++ encodeLEU 8 x.l1.toNat
+        ++ encodeLEU 8 x.l0.toNat := by
+  have hdvd : (256 : Nat) ^ 8 ∣ 2 ^ 64 := pow256_dvd_two_pow_64 (by omega)
+  have step : ∀ {e s k : Nat}, (256 : Nat) ^ e = 2 ^ s → x.toNat >>> s % 2 ^ 64 = k →
+      encodeLEU 8 (x.toNat / 256 ^ e) = encodeLEU 8 k := by
+    intro e s k he hw
+    rw [← hw, Nat.shiftRight_eq_div_pow, encodeLEU_mod_of_dvd hdvd, he]
+  have hl0 := step (by omega : (256 : Nat) ^ 24 = 2 ^ 192) (toNat_window_l0 x)
+  have hl1 := step (by omega : (256 : Nat) ^ 16 = 2 ^ 128) (toNat_window_l1 x)
+  have hl2 := step (by omega : (256 : Nat) ^ 8 = 2 ^ 64) (toNat_window_l2 x)
+  have hl3 : encodeLEU 8 x.toNat = encodeLEU 8 x.l3.toNat := by
+    rw [← toNat_window_l3 x, encodeLEU_mod_of_dvd hdvd]
+  have d1 : x.toNat / 256 ^ 8 / 256 ^ 8 = x.toNat / 256 ^ 16 := by
+    rw [Nat.div_div_eq_div_mul]
+  have d2 : x.toNat / 256 ^ 16 / 256 ^ 8 = x.toNat / 256 ^ 24 := by
+    rw [Nat.div_div_eq_div_mul]
+  show encodeLEU (8 + 24) x.toNat = _
+  rw [encodeLEU_add 8 24 x.toNat, show (24 : Nat) = 8 + 16 from rfl,
+    encodeLEU_add 8 16 (x.toNat / 256 ^ 8), show (16 : Nat) = 8 + 8 from rfl,
+    encodeLEU_add 8 8 (x.toNat / 256 ^ 8 / 256 ^ 8), d1, d2, hl3, hl2, hl1, hl0]
+  simp [List.append_assoc]
+
+/-- The swap the compiler acts on for the little-endian encoder. -/
+@[csimp] theorem toLEByteArray_eq_fast : @toLEByteArray = @toLEByteArrayFast := by
+  funext x
+  apply ByteArray.data_inj
+  rw [← Array.toList_inj]
+  simp only [toLEByteArray, encodeLEBytes, List.data_toByteArray, List.toList_toArray,
+    toLEByteArrayFast, pushLE, pushLELimb_eq,
+    show (ByteArray.emptyWithCapacity byteSize).data.toList = [] from rfl, List.nil_append]
+  exact encodeLEU_byteSize_limbs x
+
+/-- `pushBE` appends the big-endian encoding. -/
+theorem pushBE_eq (x : UInt256) (acc : ByteArray) :
+    (pushBE x acc).data.toList = acc.data.toList ++ encodeBEU byteSize x.toNat := by
+  unfold pushBE
+  simp only [pushBELimb_eq, List.append_assoc]
+  rw [encodeBEU_byteSize_limbs x]
+  simp [List.append_assoc]
+
+/-- `pushLE` appends the little-endian encoding. -/
+theorem pushLE_eq (x : UInt256) (acc : ByteArray) :
+    (pushLE x acc).data.toList = acc.data.toList ++ encodeLEU byteSize x.toNat := by
+  unfold pushLE
+  simp only [pushLELimb_eq, List.append_assoc]
+  rw [encodeLEU_byteSize_limbs x]
+  simp [List.append_assoc]
 
 /-- **Refinement**: the `ByteArray` encoder agrees with the `List UInt8` encoder. -/
 theorem toList_toBEByteArray (x : UInt256) :
