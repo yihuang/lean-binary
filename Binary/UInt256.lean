@@ -759,40 +759,37 @@ private theorem usize_add8_ok {ba : ByteArray} {off : USize} {k : Nat} (hk : k <
   have hk' : (8 * k) % 2 ^ System.Platform.numBits ≤ 8 * k := Nat.mod_le _ _
   omega
 
+/-- One unchecked `uset` inside an eight-byte span, carrying the size proof
+forward so the next store does not have to re-prove it. -/
+@[inline]
+private def usetSpan (ba ba0 : ByteArray) (off : USize) (k : Nat) (hk : k < 8) (v : UInt8)
+    (h0 : off.toNat + 8 ≤ ba0.size) (h : ba.size = ba0.size) :
+    { ba' : ByteArray // ba'.size = ba0.size } :=
+  ⟨ba.uset (off + USize.ofNat k) v
+      (by rw [h]; simpa using uset_lt_of_le hk h0),
+   by rw [byteArray_size_uset ba (off + USize.ofNat k) v
+      (by rw [h]; simpa using uset_lt_of_le hk h0), h]⟩
+
+@[simp] private theorem usetSpan_size (ba ba0 : ByteArray) (off : USize) (k : Nat) (hk : k < 8)
+    (v : UInt8) (h0 : off.toNat + 8 ≤ ba0.size) (h : ba.size = ba0.size) :
+    (usetSpan ba ba0 off k hk v h0 h).1.size = ba0.size :=
+  (usetSpan ba ba0 off k hk v h0 h).2
+
 private def write8At (ba : ByteArray) (off : USize) (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8)
     (h : off.toNat + 8 ≤ ba.size) : ByteArray :=
-  let ba1 := ba.uset off b0
-  have h1 : ba1.size = ba.size := byteArray_size_uset ba off b0 (by omega)
-  let ba2 := ba1.uset (off + 1) b1 (by rw [h1]; simpa using uset_lt_of_le (by omega : 1 < 8) h)
-  have h2 : ba2.size = ba.size := by
-    rw [show ba2.size = ba1.size from byteArray_size_uset ba1 (off + 1) b1
-      (by rw [h1]; simpa using uset_lt_of_le (by omega : 1 < 8) h), h1]
-  let ba3 := ba2.uset (off + 2) b2 (by rw [h2]; simpa using uset_lt_of_le (by omega : 2 < 8) h)
-  have h3 : ba3.size = ba.size := by
-    rw [show ba3.size = ba2.size from byteArray_size_uset ba2 (off + 2) b2
-      (by rw [h2]; simpa using uset_lt_of_le (by omega : 2 < 8) h), h2]
-  let ba4 := ba3.uset (off + 3) b3 (by rw [h3]; simpa using uset_lt_of_le (by omega : 3 < 8) h)
-  have h4 : ba4.size = ba.size := by
-    rw [show ba4.size = ba3.size from byteArray_size_uset ba3 (off + 3) b3
-      (by rw [h3]; simpa using uset_lt_of_le (by omega : 3 < 8) h), h3]
-  let ba5 := ba4.uset (off + 4) b4 (by rw [h4]; simpa using uset_lt_of_le (by omega : 4 < 8) h)
-  have h5 : ba5.size = ba.size := by
-    rw [show ba5.size = ba4.size from byteArray_size_uset ba4 (off + 4) b4
-      (by rw [h4]; simpa using uset_lt_of_le (by omega : 4 < 8) h), h4]
-  let ba6 := ba5.uset (off + 5) b5 (by rw [h5]; simpa using uset_lt_of_le (by omega : 5 < 8) h)
-  have h6 : ba6.size = ba.size := by
-    rw [show ba6.size = ba5.size from byteArray_size_uset ba5 (off + 5) b5
-      (by rw [h5]; simpa using uset_lt_of_le (by omega : 5 < 8) h), h5]
-  let ba7 := ba6.uset (off + 6) b6 (by rw [h6]; simpa using uset_lt_of_le (by omega : 6 < 8) h)
-  have h7 : ba7.size = ba.size := by
-    rw [show ba7.size = ba6.size from byteArray_size_uset ba6 (off + 6) b6
-      (by rw [h6]; simpa using uset_lt_of_le (by omega : 6 < 8) h), h6]
-  ba7.uset (off + 7) b7 (by rw [h7]; simpa using uset_lt_of_le (by omega : 7 < 8) h)
+  let s1 := usetSpan ba ba off 0 (by omega) b0 h (by rfl)
+  let s2 := usetSpan s1.1 ba off 1 (by omega) b1 h s1.2
+  let s3 := usetSpan s2.1 ba off 2 (by omega) b2 h s2.2
+  let s4 := usetSpan s3.1 ba off 3 (by omega) b3 h s3.2
+  let s5 := usetSpan s4.1 ba off 4 (by omega) b4 h s4.2
+  let s6 := usetSpan s5.1 ba off 5 (by omega) b5 h s5.2
+  let s7 := usetSpan s6.1 ba off 6 (by omega) b6 h s6.2
+  (usetSpan s7.1 ba off 7 (by omega) b7 h s7.2).1
 
 private theorem write8At_size (ba : ByteArray) (off : USize) (b0 b1 b2 b3 b4 b5 b6 b7 : UInt8)
     (h : off.toNat + 8 ≤ ba.size) : (write8At ba off b0 b1 b2 b3 b4 b5 b6 b7 h).size = ba.size := by
   unfold write8At
-  simp [byteArray_size_uset]
+  simp [usetSpan_size]
 
 def writeBELimbAt (x : UInt64) (ba : ByteArray) (off : USize) (h : off.toNat + 8 ≤ ba.size) : ByteArray :=
   write8At ba off (x >>> 56).toUInt8 (x >>> 48).toUInt8 (x >>> 40).toUInt8
@@ -940,20 +937,22 @@ private theorem write8At_toList (ba : ByteArray) (off : USize)
   have e : (write8At ba off b0 b1 b2 b3 b4 b5 b6 b7 h).data.toList
       = spliceFrom ba.data.toList off.toNat [b0, b1, b2, b3, b4, b5, b6, b7] := by
     unfold write8At
-    simp only [byteArray_uset_toList]
-    rw [show (off + 1).toNat = off.toNat + 1 from by
+    simp only [usetSpan, byteArray_uset_toList]
+    rw [show (off + USize.ofNat 0).toNat = off.toNat + 0 from by
+          simpa using usize_toNat_add_of_lt (by omega : off.toNat + 0 < USize.size),
+      show (off + USize.ofNat 1).toNat = off.toNat + 1 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 1 < USize.size),
-      show (off + 2).toNat = off.toNat + 2 from by
+      show (off + USize.ofNat 2).toNat = off.toNat + 2 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 2 < USize.size),
-      show (off + 3).toNat = off.toNat + 3 from by
+      show (off + USize.ofNat 3).toNat = off.toNat + 3 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 3 < USize.size),
-      show (off + 4).toNat = off.toNat + 4 from by
+      show (off + USize.ofNat 4).toNat = off.toNat + 4 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 4 < USize.size),
-      show (off + 5).toNat = off.toNat + 5 from by
+      show (off + USize.ofNat 5).toNat = off.toNat + 5 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 5 < USize.size),
-      show (off + 6).toNat = off.toNat + 6 from by
+      show (off + USize.ofNat 6).toNat = off.toNat + 6 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 6 < USize.size),
-      show (off + 7).toNat = off.toNat + 7 from by
+      show (off + USize.ofNat 7).toNat = off.toNat + 7 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 7 < USize.size)]
     rfl
   rw [e, spliceFrom_eq _ _ _ hlen]
