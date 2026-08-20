@@ -161,6 +161,17 @@ theorem encodeBEU_succ (len n : Nat) :
     encodeBEU (len + 1) n = encodeBEU len (n / 256) ++ [UInt8.ofNat (n % 256)] := by
   simp [encodeBEU, natsToUInt8, encodeBE_succ]
 
+/-- One more byte, big-endian, split at the other end: the head is digit
+`len` of the value. -/
+theorem encodeBEU_cons (len n : Nat) :
+    encodeBEU (len + 1) n = UInt8.ofNat (n / 256 ^ len % 256) :: encodeBEU len n := by
+  induction len generalizing n with
+  | zero => rw [encodeBEU_succ, Nat.pow_zero, Nat.div_one]; rfl
+  | succ l ih =>
+      rw [encodeBEU_succ (l + 1) n, ih (n / 256), encodeBEU_succ l n, Nat.div_div_eq_div_mul,
+        show (256 : Nat) * 256 ^ l = 256 ^ (l + 1) by rw [Nat.pow_succ, Nat.mul_comm],
+        List.cons_append]
+
 /-- Concatenation law for big-endian decoding. -/
 theorem decodeBEU_append (xs ys : List UInt8) :
     decodeBEU (xs ++ ys) = decodeBEU xs * 256 ^ ys.length + decodeBEU ys := by
