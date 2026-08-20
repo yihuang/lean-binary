@@ -147,6 +147,21 @@ def pushBEChunk (len : Nat) (x : UInt64) (acc : ByteArray) : ByteArray :=
   | 0 => acc
   | l + 1 => (pushBEChunk l (x >>> 8) acc).push x.toUInt8
 
+/-- `pushBEChunk 8` unrolled straight-line.  `pushBEChunk` takes its
+accumulator *borrowed*, so a caller that hands it the buffer it is building
+pays a full copy per chunk; straight-line pushes keep the buffer uniquely
+referenced, so every push lands in place. -/
+def pushLimb (x : UInt64) (acc : ByteArray) : ByteArray :=
+  let x1 := x >>> 8
+  let x2 := x1 >>> 8
+  let x3 := x2 >>> 8
+  let x4 := x3 >>> 8
+  let x5 := x4 >>> 8
+  let x6 := x5 >>> 8
+  let x7 := x6 >>> 8
+  ((((((((acc.push x7.toUInt8).push x6.toUInt8).push x5.toUInt8).push
+    x4.toUInt8).push x3.toUInt8).push x2.toUInt8).push x1.toUInt8).push x.toUInt8)
+
 theorem leChunk_eq (len : Nat) (x : UInt64) : leChunk len x = encodeLEU len x.toNat := by
   induction len generalizing x with
   | zero => rfl
@@ -177,6 +192,11 @@ theorem pushBEChunk_eq (len : Nat) (x : UInt64) (acc : ByteArray) :
   | succ l ih =>
       rw [pushBEChunk, ByteArray.data_push, Array.toList_push, ih, toNat_shiftRight_eight,
         encodeBEU_succ, toUInt8_eq_ofNat_mod, List.append_assoc]
+
+/-- `pushLimb` is `pushBEChunk 8` definitionally, so its law is that one's. -/
+theorem pushLimb_eq (x : UInt64) (acc : ByteArray) :
+    (pushLimb x acc).data.toList = acc.data.toList ++ encodeBEU 8 x.toNat :=
+  pushBEChunk_eq 8 x acc
 
 /-! ## Fast encoders
 
@@ -212,7 +232,7 @@ def encodeLEBytesFast (len n : Nat) : ByteArray :=
 /-- Big-endian `ByteArray` encoding: recurse on the more significant chunks
 first, then push the low eight bytes. -/
 def encodeBEBytesFast.loop (acc : ByteArray) (len n : Nat) : ByteArray :=
-  if 8 < len then pushBEChunk 8 (UInt64.ofNat n) (loop acc (len - 8) (n >>> 64))
+  if 8 < len then pushLimb (UInt64.ofNat n) (loop acc (len - 8) (n >>> 64))
   else pushBEChunk len (UInt64.ofNat n) acc
 termination_by len
 
@@ -257,7 +277,7 @@ theorem encodeBEBytesFast.loop_eq (acc : ByteArray) (len n : Nat) :
     (encodeBEBytesFast.loop acc len n).data.toList = acc.data.toList ++ encodeBEU len n := by
   induction len, n using encodeBEBytesFast.loop.induct with
   | case1 len n h ih =>
-      rw [encodeBEBytesFast.loop, if_pos h, pushBEChunk_eq, ih, List.append_assoc,
+      rw [encodeBEBytesFast.loop, if_pos h, pushLimb_eq, ih, List.append_assoc,
         ← encodeBEU_chunk (by omega)]
   | case2 len n h =>
       rw [encodeBEBytesFast.loop, if_neg h, pushBEChunk_eq, encodeBEU_window (by omega)]
