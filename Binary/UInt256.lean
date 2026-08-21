@@ -1202,72 +1202,114 @@ private theorem push_grow_ok (acc : ByteArray) :
     simp [ByteArray.size, byteSize]
   rw [hmk]; omega
 
-/-- Append the big-endian encoding of `x` to an existing `ByteArray`: grow by
-a zero word, then write into it.  `USize.ofNat` would wrap on a buffer that
-large, so past `USize.size` the limb chain does it instead. -/
+/-- A buffer size below which `USize.ofNat` cannot wrap, on any platform.
+`USize.size` is the honest bound but is platform-opaque, and `2 ^ 32` is
+emitted as a string parsed on every call, being wider than a C `unsigned`. -/
+abbrev noWrapLimit : Nat := 2147483648
+
+theorem noWrapLimit_le_usize_size : noWrapLimit ≤ USize.size := by
+  rcases System.Platform.numBits_eq with h | h <;> simp [noWrapLimit, USize.size, h]
+
+/-- The four-limb big-endian chain, as a standalone helper.  Both `pushBE`
+(the kernel-reducible spec) and `pushBEFast` (the compiled fallback) call
+this, so the `@[csimp]` rewrite of `pushBE` to `pushBEFast` can never turn
+`pushBEFast`'s own fallback into a self-call. -/
+private def pushBELimbs (x : UInt256) (acc : ByteArray) : ByteArray :=
+  pushBELimb x.l3 (pushBELimb x.l2 (pushBELimb x.l1 (pushBELimb x.l0 acc)))
+
+/-- The four-limb little-endian chain, as a standalone helper.  Same rationale
+as `pushBELimbs`. -/
+private def pushLELimbs (x : UInt256) (acc : ByteArray) : ByteArray :=
+  pushLELimb x.l0 (pushLELimb x.l1 (pushLELimb x.l2 (pushLELimb x.l3 acc)))
+
+/-- Append the big-endian encoding of `x` to an existing `ByteArray`.  The
+limb chain, so `decide +kernel` can evaluate encoders built on this; the
+offset write is `pushBEFast`, swapped in at code generation. -/
 def pushBE (x : UInt256) (acc : ByteArray) : ByteArray :=
-  if acc.size + 32 < USize.size then
-    writeBEAt x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
-      (push_grow_ok acc)
-  else
-    pushBELimb x.l3 (pushBELimb x.l2 (pushBELimb x.l1 (pushBELimb x.l0 acc)))
+  pushBELimbs x acc
 
 /-- Append the little-endian encoding of `x`.  Same shape as `pushBE`. -/
 def pushLE (x : UInt256) (acc : ByteArray) : ByteArray :=
-  if acc.size + 32 < USize.size then
+  pushLELimbs x acc
+
+/-- What `pushBE` runs as: grow by a zero word, then write into it.  A buffer
+too large for the offset falls back to the limb chain via `pushBELimbs`,
+not through `pushBE`, so `@[csimp]` cannot rewrite the fallback into a
+self-call. -/
+def pushBEFast (x : UInt256) (acc : ByteArray) : ByteArray :=
+  if acc.size + 32 < noWrapLimit then
+    writeBEAt x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
+      (push_grow_ok acc)
+  else pushBELimbs x acc
+
+/-- What `pushLE` runs as.  Same shape as `pushBEFast`. -/
+def pushLEFast (x : UInt256) (acc : ByteArray) : ByteArray :=
+  if acc.size + 32 < noWrapLimit then
     writeLEAt x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
       (push_grow_ok acc)
-  else
-    pushLELimb x.l0 (pushLELimb x.l1 (pushLELimb x.l2 (pushLELimb x.l3 acc)))
+  else pushLELimbs x acc
 
-/-- The splice of a 32-byte zero tail: the prefix is `acc`'s data, the part
-after the word is empty. -/
-private theorem append_replicate32_take_drop (acc : ByteArray) :
-    (acc.data.toList ++ List.replicate 32 0).take acc.size = acc.data.toList
-      ∧ (acc.data.toList ++ List.replicate 32 0).drop (acc.size + 32) = [] := by
+/-- Writing a word into the grown buffer leaves `acc`, then the word. -/
+private theorem splice_grown (acc : ByteArray) (w : List UInt8) :
+    (acc ++ ByteArray.mk (Array.replicate byteSize 0)).data.toList.take acc.size ++ w
+        ++ (acc ++ ByteArray.mk (Array.replicate byteSize 0)).data.toList.drop (acc.size + 32)
+      = acc.data.toList ++ w := by
   have hlen : acc.data.toList.length = acc.size := by rw [ByteArray.size_eq_toList_length]
-  constructor
-  · rw [List.take_append, hlen]
-    rw [List.take_of_length_le (by omega), Nat.sub_self, List.take_zero, List.append_nil]
-  · rw [List.drop_append, hlen]
-    rw [List.drop_eq_nil_of_le (by omega), List.nil_append, Nat.add_sub_cancel_left]
-    simp
+  simp only [ByteArray.toList_data_append, Array.toList_replicate, byteSize]
+  rw [List.take_append, hlen, List.take_of_length_le (by omega), Nat.sub_self,
+    List.take_zero, List.append_nil, List.drop_append, hlen,
+    List.drop_eq_nil_of_le (by omega), List.nil_append, Nat.add_sub_cancel_left]
+  simp
 
-/-- `pushBE` appends the big-endian encoding, at any buffer size. -/
+/-- `pushBE` appends the big-endian encoding. -/
 theorem pushBE_eq (x : UInt256) (acc : ByteArray) :
     (pushBE x acc).data.toList = acc.data.toList ++ encodeBEU byteSize x.toNat := by
-  unfold pushBE
-  split
-  case isFalse =>
-    simp only [pushBELimb_eq, List.append_assoc]
-    rw [encodeBEU_byteSize_limbs x]
-    simp [List.append_assoc]
-  case isTrue h' =>
-  have hoff : (USize.ofNat acc.size).toNat = acc.size :=
-    USize.toNat_ofNat_of_lt' (by omega)
-  rw [writeBEAt_eq x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
-      (push_grow_ok acc) (by rw [hoff]; omega), hoff]
-  have htd := append_replicate32_take_drop acc
-  simp only [toBEBytes, ByteArray.toList_data_append, Array.toList_replicate]
-  rw [htd.1, htd.2, List.append_nil]
+  unfold pushBE pushBELimbs
+  simp only [pushBELimb_eq, List.append_assoc]
+  rw [encodeBEU_byteSize_limbs x]
+  simp [List.append_assoc]
 
-/-- `pushLE` appends the little-endian encoding, at any buffer size. -/
+/-- The offset write agrees with the limb chain, so it is what the compiler
+runs: both denote the same bytes, and `ByteArray.data_inj` lifts that to the
+buffers. -/
+@[csimp] theorem pushBE_eq_fast : @pushBE = @pushBEFast := by
+  funext x acc
+  rw [pushBEFast]
+  split
+  case isFalse => rfl
+  case isTrue h =>
+    have hu := noWrapLimit_le_usize_size
+    apply ByteArray.data_inj
+    rw [← Array.toList_inj, pushBE_eq]
+    have hoff : (USize.ofNat acc.size).toNat = acc.size :=
+      USize.toNat_ofNat_of_lt' (by omega)
+    rw [writeBEAt_eq x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
+        (push_grow_ok acc) (by rw [hoff]; omega), hoff, splice_grown, toBEBytes]
+
+/-- `pushLE` appends the little-endian encoding. -/
 theorem pushLE_eq (x : UInt256) (acc : ByteArray) :
     (pushLE x acc).data.toList = acc.data.toList ++ encodeLEU byteSize x.toNat := by
-  unfold pushLE
+  unfold pushLE pushLELimbs
+  simp only [pushLELimb_eq, List.append_assoc]
+  rw [encodeLEU_byteSize_limbs x]
+  simp [List.append_assoc]
+
+/-- The offset write agrees with the limb chain, so it is what the compiler
+runs: both denote the same bytes, and `ByteArray.data_inj` lifts that to the
+buffers. -/
+@[csimp] theorem pushLE_eq_fast : @pushLE = @pushLEFast := by
+  funext x acc
+  rw [pushLEFast]
   split
-  case isFalse =>
-    simp only [pushLELimb_eq, List.append_assoc]
-    rw [encodeLEU_byteSize_limbs x]
-    simp [List.append_assoc]
-  case isTrue h' =>
-  have hoff : (USize.ofNat acc.size).toNat = acc.size :=
-    USize.toNat_ofNat_of_lt' (by omega)
-  rw [writeLEAt_eq x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
-      (push_grow_ok acc) (by rw [hoff]; omega), hoff]
-  have htd := append_replicate32_take_drop acc
-  simp only [toLEBytes, ByteArray.toList_data_append, Array.toList_replicate]
-  rw [htd.1, htd.2, List.append_nil]
+  case isFalse => rfl
+  case isTrue h =>
+    have hu := noWrapLimit_le_usize_size
+    apply ByteArray.data_inj
+    rw [← Array.toList_inj, pushLE_eq]
+    have hoff : (USize.ofNat acc.size).toNat = acc.size :=
+      USize.toNat_ofNat_of_lt' (by omega)
+    rw [writeLEAt_eq x (acc ++ ByteArray.mk (Array.replicate byteSize 0)) (USize.ofNat acc.size)
+        (push_grow_ok acc) (by rw [hoff]; omega), hoff, splice_grown, toLEBytes]
 
 def toBEByteArrayFast (x : UInt256) : ByteArray :=
   writeBEAt x (ByteArray.mk (Array.replicate byteSize 0)) (0 : USize)
