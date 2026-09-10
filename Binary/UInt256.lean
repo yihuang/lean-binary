@@ -939,7 +939,7 @@ private theorem write8At_toList (ba : ByteArray) (off : USize)
     unfold write8At
     simp only [usetSpan, byteArray_uset_toList]
     rw [show (off + USize.ofNat 0).toNat = off.toNat + 0 from by
-          simpa using usize_toNat_add_of_lt (by omega : off.toNat + 0 < USize.size),
+          exact usize_toNat_add_of_lt (by omega : off.toNat + 0 < USize.size),
       show (off + USize.ofNat 1).toNat = off.toNat + 1 from by
           simpa using usize_toNat_add_of_lt (by omega : off.toNat + 1 < USize.size),
       show (off + USize.ofNat 2).toNat = off.toNat + 2 from by
